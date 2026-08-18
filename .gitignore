@@ -1,0 +1,29 @@
+# Claude Code local settings
+.claude/settings.local.json
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Env / secrets
+.env
+.env.*
+
+# Editors
+.vscode/
+.idea/

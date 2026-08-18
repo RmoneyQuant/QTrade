@@ -1,0 +1,680 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>One Binary, Two Modes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+:root{
+  --bg:#F4F5F8; --surface:#FFFFFF; --surface-2:#EAECF2;
+  --ink:#14172A; --muted:#565D78; --line:#C8CCDA; --line-strong:#8E96AE;
+  --core:#2A46A8; --core-tint:#E8ECFA; --core-on:#FFFFFF;
+  --bt:#A16207; --bt-tint:#FBF1DE;
+  --live:#0B7A72; --live-tint:#DCF2EF;
+  --measure:68ch;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0D0F1C; --surface:#161A2C; --surface-2:#1E2336;
+    --ink:#E7E9F2; --muted:#969DBA; --line:#2A3049; --line-strong:#5B6486;
+    --core:#93A8F5; --core-tint:#1A2044; --core-on:#0D0F1C;
+    --bt:#E3A94B; --bt-tint:#312610;
+    --live:#45C7BE; --live-tint:#0B2E2C;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0D0F1C; --surface:#161A2C; --surface-2:#1E2336;
+  --ink:#E7E9F2; --muted:#969DBA; --line:#2A3049; --line-strong:#5B6486;
+  --core:#93A8F5; --core-tint:#1A2044; --core-on:#0D0F1C;
+  --bt:#E3A94B; --bt-tint:#312610;
+  --live:#45C7BE; --live-tint:#0B2E2C;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:'IBM Plex Sans',system-ui,sans-serif;
+  font-size:16px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1240px; margin:0 auto; padding:0 24px 96px;
+  display:flex; flex-direction:column; gap:56px}
+.col{max-width:var(--measure)}
+
+header{padding:72px 0 0; display:flex; flex-direction:column; gap:20px}
+.eyebrow{font-family:'IBM Plex Mono',monospace; font-size:12px; font-weight:600;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--core); margin:0}
+h1{font-family:'Archivo',system-ui,sans-serif; font-weight:700;
+  font-size:clamp(2.3rem,5.5vw,3.6rem); line-height:1.04; letter-spacing:-.02em;
+  margin:0; text-wrap:balance}
+.lede{font-size:1.13rem; color:var(--muted); margin:0; max-width:62ch}
+.lede strong{color:var(--ink); font-weight:600}
+.meta{display:flex; flex-wrap:wrap; gap:8px; margin-top:4px}
+.chip{font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.04em;
+  padding:5px 11px; border-radius:100px; border:1px solid var(--line);
+  background:var(--surface); color:var(--muted)}
+.chip.c-core{border-color:var(--core); color:var(--core)}
+.chip.c-bt{border-color:var(--bt); color:var(--bt)}
+.chip.c-live{border-color:var(--live); color:var(--live)}
+
+section{display:flex; flex-direction:column; gap:22px}
+h2{font-family:'Archivo',system-ui,sans-serif; font-weight:600;
+  font-size:clamp(1.45rem,2.8vw,1.95rem); line-height:1.16; letter-spacing:-.012em;
+  margin:0; text-wrap:balance}
+h3{font-family:'Archivo',system-ui,sans-serif; font-weight:600; font-size:1.06rem;
+  margin:0 0 2px; letter-spacing:-.005em}
+p{margin:0}
+.col p + p{margin-top:14px}
+code{font-family:'IBM Plex Mono',monospace; font-size:.87em;
+  background:var(--surface-2); padding:1.5px 5px; border-radius:4px}
+a{color:var(--core)}
+:focus-visible{outline:2.5px solid var(--core); outline-offset:3px; border-radius:3px}
+
+figure{margin:0; display:flex; flex-direction:column; gap:14px}
+.figbox{background:var(--surface); border:1px solid var(--line);
+  border-radius:12px; padding:20px; overflow-x:auto}
+.figbox svg{display:block; min-width:640px; max-width:100%; height:auto; margin:0 auto}
+figcaption{font-size:.93rem; color:var(--muted); max-width:74ch}
+figcaption b{color:var(--ink); font-weight:600}
+
+.bx{fill:var(--surface); stroke:var(--line-strong); stroke-width:1.5}
+.bx-core{fill:var(--surface); stroke:var(--core); stroke-width:1.7}
+.bx-bt{fill:var(--bt-tint); stroke:var(--bt); stroke-width:1.5}
+.bx-live{fill:var(--live-tint); stroke:var(--live); stroke-width:1.5}
+.bx-ext{fill:none; stroke:var(--muted); stroke-width:1.5; stroke-dasharray:7 5}
+.band{fill:var(--core-tint); stroke:var(--core); stroke-width:2}
+.tab{fill:var(--core)}
+.shade{fill:var(--bt-tint)}
+
+.ln{stroke:var(--line-strong); stroke-width:1.8; fill:none;
+  stroke-linejoin:round; stroke-linecap:round}
+.ln-core{stroke:var(--core); stroke-width:1.9; fill:none;
+  stroke-linejoin:round; stroke-linecap:round}
+.ln-bt{stroke:var(--bt); stroke-width:1.8; fill:none;
+  stroke-linejoin:round; stroke-linecap:round}
+.ln-live{stroke:var(--live); stroke-width:1.8; fill:none;
+  stroke-linejoin:round; stroke-linecap:round}
+.dash{stroke-dasharray:5 4}
+
+.mk-line{fill:var(--line-strong)}
+.mk-core{fill:var(--core)}
+.mk-bt{fill:var(--bt)}
+.mk-live{fill:var(--live)}
+
+.t-ttl{font-family:'IBM Plex Sans',sans-serif; font-size:14.5px; font-weight:600; fill:var(--ink)}
+.t-ttl-sm{font-family:'IBM Plex Sans',sans-serif; font-size:13px; font-weight:600; fill:var(--ink)}
+.t-sub{font-family:'IBM Plex Mono',monospace; font-size:11px; fill:var(--muted)}
+.t-lbl{font-family:'IBM Plex Mono',monospace; font-size:11px; fill:var(--muted)}
+.t-zone{font-family:'IBM Plex Mono',monospace; font-size:12px; font-weight:600; letter-spacing:.11em; fill:var(--muted)}
+.t-tab{font-family:'IBM Plex Mono',monospace; font-size:12px; font-weight:600;
+  letter-spacing:.1em; fill:var(--core-on)}
+.f-bt{fill:var(--bt)} .f-live{fill:var(--live)} .f-core{fill:var(--core)} .f-ink{fill:var(--ink)}
+.mid{text-anchor:middle} .end{text-anchor:end}
+
+.legend{display:grid; grid-template-columns:repeat(auto-fit,minmax(215px,1fr)); gap:12px 26px;
+  padding:18px 20px; background:var(--surface); border:1px solid var(--line); border-radius:12px}
+.lg{display:flex; align-items:center; gap:11px; font-size:.87rem; color:var(--muted)}
+.lg svg{flex:none}
+.lg b{color:var(--ink); font-weight:600; font-family:'IBM Plex Mono',monospace; font-size:.83rem}
+
+.tablewrap{overflow-x:auto; border:1px solid var(--line); border-radius:12px; background:var(--surface)}
+table{border-collapse:collapse; width:100%; min-width:660px; font-size:.92rem}
+th,td{text-align:left; padding:13px 18px; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:'IBM Plex Mono',monospace; font-size:11px; font-weight:600;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--muted);
+  background:var(--surface-2); white-space:nowrap}
+tbody tr:last-child td{border-bottom:none}
+td:first-child{font-family:'IBM Plex Mono',monospace; font-size:.85rem; white-space:nowrap; color:var(--ink)}
+.pill{display:inline-block; font-family:'IBM Plex Mono',monospace; font-size:10.5px;
+  font-weight:600; letter-spacing:.06em; padding:3px 9px; border-radius:100px; white-space:nowrap}
+.p-core{background:var(--core-tint); color:var(--core)}
+.p-bt{background:var(--bt-tint); color:var(--bt)}
+.p-live{background:var(--live-tint); color:var(--live)}
+
+.rules{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:2px;
+  background:var(--line); border:1px solid var(--line); border-radius:12px; overflow:hidden}
+.rule{background:var(--surface); padding:20px 22px; display:flex; flex-direction:column; gap:7px}
+.rule p{font-size:.92rem; color:var(--muted)}
+.rule .tagline{font-family:'IBM Plex Mono',monospace; font-size:10.5px; font-weight:600;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--core)}
+
+@media (prefers-reduced-motion:no-preference){
+  a,.chip{transition:color .15s ease, border-color .15s ease}
+}
+@media (max-width:640px){
+  header{padding-top:48px}
+  .wrap{gap:44px; padding:0 16px 64px}
+  .figbox{padding:12px}
+}
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">NSE MTBT 7.0 &middot; Backtest &amp; Live Engine</p>
+  <h1>One Binary, Two Modes</h1>
+  <p class="lede">The strategy, the decoder, the order book, the cache and the execution engine are <strong>the same compiled code</strong> in backtesting and in production. Only two thin edges swap: where bytes come from, and where orders go.</p>
+  <div class="meta">
+    <span class="chip c-core">shared core</span>
+    <span class="chip c-bt">backtest-only edge</span>
+    <span class="chip c-live">live-only edge</span>
+    <span class="chip">order-by-order LOB</span>
+    <span class="chip">exact queue position</span>
+  </div>
+</header>
+
+<section>
+  <div class="col">
+    <h2>The whole system</h2>
+    <p>Read it top to bottom. Market data descends from the source edge through the shared core; order commands descend from the strategy to the venue edge; execution reports climb back up into the execution engine. Everything inside the indigo band is compiled once and never recompiled to go live.</p>
+  </div>
+
+  <figure>
+    <div class="figbox">
+      <svg viewBox="0 0 1500 1520" role="img" aria-label="Full architecture: a recorded packet file with a replay feeder on the backtest side and UDP multicast with A/B arbitration, gap detection and TCP recovery on the live side both converge into a raw packet ring buffer, which feeds a shared core containing decoder, normalizer, data engine, book builder, cache, strategy, execution engine and risk; the core then emits order commands to either a matching simulator in backtest or an NNF CTCL gateway in live, and both return execution reports to the execution engine.">
+        <defs>
+          <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-line"/></marker>
+          <marker id="a1c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker>
+          <marker id="a1b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-bt"/></marker>
+          <marker id="a1l" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-live"/></marker>
+        </defs>
+
+        <text x="180" y="42" class="t-zone f-bt">BACKTEST-ONLY EDGE</text>
+        <text x="880" y="42" class="t-zone f-live">LIVE-ONLY EDGE</text>
+
+        <rect x="180" y="60" width="440" height="60" rx="6" class="bx-bt"/>
+        <text x="400" y="86" class="t-ttl mid">Recorded packet capture</text>
+        <text x="400" y="105" class="t-sub mid">raw MTBT bytes &middot; capture order &middot; mmap</text>
+        <line x1="400" y1="120" x2="400" y2="150" class="ln-bt" marker-end="url(#a1b)"/>
+        <rect x="180" y="152" width="440" height="60" rx="6" class="bx-bt"/>
+        <text x="400" y="178" class="t-ttl mid">Replay Feeder</text>
+        <text x="400" y="197" class="t-sub mid">paces by capture timestamp</text>
+
+        <rect x="880" y="60" width="210" height="48" rx="6" class="bx-live"/>
+        <text x="985" y="82" class="t-ttl-sm mid">UDP Multicast</text>
+        <text x="985" y="99" class="t-sub mid">Source 1</text>
+        <rect x="1110" y="60" width="210" height="48" rx="6" class="bx-live"/>
+        <text x="1215" y="82" class="t-ttl-sm mid">UDP Multicast</text>
+        <text x="1215" y="99" class="t-sub mid">Source 2</text>
+        <line x1="985" y1="108" x2="985" y2="138" class="ln-live" marker-end="url(#a1l)"/>
+        <line x1="1215" y1="108" x2="1215" y2="138" class="ln-live" marker-end="url(#a1l)"/>
+        <rect x="880" y="140" width="440" height="48" rx="6" class="bx-live"/>
+        <text x="1100" y="162" class="t-ttl mid">A / B Line Arbitrator</text>
+        <text x="1100" y="180" class="t-sub mid">dedupe by stream + seq &middot; one lags</text>
+        <line x1="1100" y1="188" x2="1100" y2="218" class="ln-live" marker-end="url(#a1l)"/>
+        <rect x="880" y="220" width="440" height="48" rx="6" class="bx-live"/>
+        <text x="1100" y="242" class="t-ttl mid">Gap Detector</text>
+        <text x="1100" y="260" class="t-sub mid">per-stream seq &middot; DR reset to 1</text>
+
+        <rect x="640" y="212" width="200" height="64" rx="6" class="bx-live"/>
+        <text x="740" y="236" class="t-ttl-sm mid">TCP Recovery</text>
+        <text x="740" y="253" class="t-sub mid">ticks &middot; 30s snapshot</text>
+        <text x="740" y="269" class="t-sub mid">max 300k / request</text>
+        <line x1="878" y1="232" x2="844" y2="232" class="ln-live" marker-end="url(#a1l)"/>
+        <text x="861" y="223" class="t-lbl mid">gap</text>
+        <line x1="844" y1="258" x2="878" y2="258" class="ln-live" marker-end="url(#a1l)"/>
+        <text x="861" y="290" class="t-lbl mid">backfill</text>
+
+        <rect x="430" y="300" width="640" height="54" rx="6" class="bx"/>
+        <text x="750" y="323" class="t-ttl mid">RAW PACKET RING BUFFER</text>
+        <text x="750" y="341" class="t-sub mid">SPSC &middot; zero-copy &middot; fixed slots</text>
+        <polyline points="400,212 400,278 500,278 500,298" class="ln-bt" marker-end="url(#a1b)"/>
+        <polyline points="1100,268 1100,278 1000,278 1000,298" class="ln-live" marker-end="url(#a1l)"/>
+        <line x1="750" y1="354" x2="750" y2="384" class="ln-core" marker-end="url(#a1c)"/>
+        <text x="768" y="373" class="t-lbl f-core">identical bytes from here down</text>
+
+        <rect x="140" y="386" width="1200" height="838" rx="14" class="band"/>
+        <rect x="140" y="386" width="530" height="34" rx="6" class="tab"/>
+        <text x="160" y="408" class="t-tab">IDENTICAL CODE &middot; ONE BINARY &middot; BOTH MODES</text>
+
+        <rect x="180" y="444" width="260" height="64" rx="6" class="bx-core"/>
+        <text x="310" y="470" class="t-ttl mid">Instrument Master</text>
+        <text x="310" y="488" class="t-sub mid">daily CSV &middot; token&#8594;stream</text>
+        <text x="310" y="503" class="t-sub mid">stable InstrumentId</text>
+        <line x1="440" y1="476" x2="498" y2="476" class="ln-core" marker-end="url(#a1c)"/>
+
+        <rect x="500" y="444" width="520" height="64" rx="6" class="bx-core"/>
+        <text x="760" y="470" class="t-ttl mid">MTBT DECODER</text>
+        <text x="760" y="489" class="t-sub mid">N M X T &middot; G H J K &middot; C &middot; Z</text>
+        <text x="760" y="504" class="t-sub mid">little-endian &middot; packed &middot; per-segment scale</text>
+        <line x1="760" y1="508" x2="760" y2="538" class="ln-core" marker-end="url(#a1c)"/>
+
+        <rect x="500" y="540" width="520" height="64" rx="6" class="bx-core"/>
+        <text x="760" y="566" class="t-ttl mid">NORMALIZER</text>
+        <text x="760" y="585" class="t-sub mid">i64 ns Unix &middot; i64 ticks &middot; u64 order id</text>
+        <text x="760" y="600" class="t-sub mid">1980 epoch &#8594; Unix &middot; double &#8594; u64</text>
+        <line x1="760" y1="604" x2="760" y2="634" class="ln-core" marker-end="url(#a1c)"/>
+
+        <rect x="500" y="636" width="520" height="60" rx="6" class="bx-core"/>
+        <text x="760" y="661" class="t-ttl mid">DATA ENGINE</text>
+        <text x="760" y="680" class="t-sub mid">subscriptions &middot; session phase &middot; book state</text>
+
+        <rect x="1080" y="636" width="220" height="60" rx="6" class="bx-core"/>
+        <text x="1190" y="661" class="t-ttl mid">CLOCK</text>
+        <text x="1190" y="680" class="t-sub mid">SimClock | LiveClock</text>
+        <line x1="1020" y1="666" x2="1078" y2="666" class="ln-core" marker-end="url(#a1c)"/>
+        <text x="1049" y="656" class="t-lbl mid">advance</text>
+
+        <polyline points="760,696 760,718 360,718 360,742" class="ln-core" marker-end="url(#a1c)"/>
+        <polyline points="760,696 760,718 1100,718 1100,742" class="ln-core" marker-end="url(#a1c)"/>
+
+        <rect x="180" y="744" width="360" height="64" rx="6" class="bx-core"/>
+        <text x="360" y="770" class="t-ttl mid">BOOK BUILDER</text>
+        <text x="360" y="789" class="t-sub mid">order-by-order &middot; crossed-tolerant</text>
+        <text x="360" y="804" class="t-sub mid">price ladder + FIFO arena</text>
+
+        <rect x="900" y="744" width="400" height="64" rx="6" class="bx-core"/>
+        <text x="1100" y="770" class="t-ttl mid">EVENT DISPATCHER</text>
+        <text x="1100" y="789" class="t-sub mid">per-token subscriber lists</text>
+        <text x="1100" y="804" class="t-sub mid">static dispatch &middot; no allocation</text>
+
+        <line x1="360" y1="808" x2="360" y2="838" class="ln-core" marker-end="url(#a1c)"/>
+        <rect x="180" y="840" width="360" height="186" rx="6" class="bx-core"/>
+        <text x="360" y="866" class="t-ttl mid">CACHE</text>
+        <text x="360" y="884" class="t-sub mid">single source of truth</text>
+        <line x1="200" y1="898" x2="520" y2="898" stroke="var(--line)" stroke-width="1"/>
+        <text x="200" y="920" class="t-sub">LOB per subscribed token</text>
+        <text x="200" y="942" class="t-sub">order_id &#8594; slot hash</text>
+        <text x="200" y="964" class="t-sub">UNINIT / RECOVERING / OK / STALE</text>
+        <text x="200" y="986" class="t-sub">own orders &middot; positions &middot; P&amp;L</text>
+        <text x="200" y="1008" class="t-sub">last trade &middot; session phase</text>
+
+        <rect x="900" y="840" width="400" height="86" rx="6" class="bx-core"/>
+        <text x="1100" y="872" class="t-ttl mid">STRATEGY</text>
+        <text x="1100" y="891" class="t-sub mid">your code &mdash; byte-identical</text>
+        <text x="1100" y="907" class="t-sub mid">no wall clock &middot; no rng &middot; no I/O</text>
+        <line x1="1100" y1="808" x2="1100" y2="838" class="ln-core" marker-end="url(#a1c)"/>
+        <text x="1114" y="828" class="t-lbl">on_book &middot; on_trade &middot; on_fill</text>
+        <line x1="542" y1="874" x2="898" y2="874" class="ln-core dash" marker-end="url(#a1c)"/>
+        <text x="720" y="866" class="t-lbl mid">read-only views</text>
+        <polyline points="1300,666 1322,666 1322,900 1302,900" class="ln-core dash" marker-end="url(#a1c)"/>
+
+        <polyline points="1100,926 1100,996 760,996 760,1054" class="ln-core" marker-end="url(#a1c)"/>
+        <text x="930" y="988" class="t-lbl mid">submit &middot; cancel &middot; modify</text>
+
+        <rect x="560" y="1056" width="400" height="60" rx="6" class="bx-core"/>
+        <text x="760" y="1081" class="t-ttl mid">EXECUTION ENGINE</text>
+        <text x="760" y="1100" class="t-sub mid">order state machine &middot; reconciliation</text>
+
+        <line x1="760" y1="1116" x2="760" y2="1140" class="ln-core" marker-end="url(#a1c)"/>
+        <rect x="560" y="1142" width="400" height="58" rx="6" class="bx-core"/>
+        <text x="760" y="1167" class="t-ttl mid">RISK / PORTFOLIO</text>
+        <text x="760" y="1186" class="t-sub mid">limits &middot; exposure &middot; kill switch</text>
+
+        <polyline points="558,1100 420,1100 420,1028" class="ln-core dash" marker-end="url(#a1c)"/>
+        <text x="432" y="1118" class="t-lbl">positions &middot; own orders</text>
+
+        <line x1="760" y1="1200" x2="760" y2="1246" class="ln-core"/>
+
+        <text x="180" y="1284" class="t-zone f-bt">BACKTEST-ONLY EDGE</text>
+        <text x="900" y="1284" class="t-zone f-live">LIVE-ONLY EDGE</text>
+
+        <polyline points="760,1246 360,1246 360,1294" class="ln-core" marker-end="url(#a1c)"/>
+        <polyline points="760,1246 1100,1246 1100,1294" class="ln-core" marker-end="url(#a1c)"/>
+        <text x="772" y="1238" class="t-lbl f-core">order commands</text>
+
+        <rect x="180" y="1296" width="360" height="150" rx="6" class="bx-bt"/>
+        <text x="360" y="1324" class="t-ttl mid">MATCHING SIMULATOR</text>
+        <line x1="200" y1="1338" x2="520" y2="1338" stroke="var(--bt)" stroke-width="1" opacity=".35"/>
+        <text x="200" y="1360" class="t-sub">latency model: feed / decide / send / ack</text>
+        <text x="200" y="1382" class="t-sub">queue overlay: qty_ahead per own order</text>
+        <text x="200" y="1404" class="t-sub">fill + partial-fill generation</text>
+        <text x="200" y="1426" class="t-sub">priority rule on modify</text>
+
+        <rect x="900" y="1296" width="400" height="60" rx="6" class="bx-live"/>
+        <text x="1100" y="1321" class="t-ttl mid">NNF / CTCL GATEWAY</text>
+        <text x="1100" y="1340" class="t-sub mid">session &middot; seq &middot; encode / decode</text>
+
+        <rect x="900" y="1396" width="400" height="56" rx="6" class="bx-ext"/>
+        <text x="1100" y="1420" class="t-ttl mid">NSE MATCHING ENGINE</text>
+        <text x="1100" y="1438" class="t-sub mid">external</text>
+        <line x1="1050" y1="1356" x2="1050" y2="1394" class="ln-live" marker-end="url(#a1l)"/>
+        <text x="1040" y="1379" class="t-lbl end">orders</text>
+        <line x1="1150" y1="1394" x2="1150" y2="1356" class="ln-live" marker-end="url(#a1l)"/>
+        <text x="1160" y="1379" class="t-lbl">reports</text>
+
+        <polyline points="180,1372 105,1372 105,1072 558,1072" class="ln-bt" marker-end="url(#a1b)"/>
+        <text x="118" y="1062" class="t-lbl f-bt">simulated fills / acks / rejects</text>
+        <polyline points="1300,1326 1370,1326 1370,1072 962,1072" class="ln-live" marker-end="url(#a1l)"/>
+        <text x="1358" y="1062" class="t-lbl end f-live">execution reports</text>
+
+        <polyline points="1300,790 1420,790 1420,1484 360,1484 360,1448" class="ln-bt" marker-end="url(#a1b)"/>
+        <text x="700" y="1476" class="t-lbl mid f-bt">the simulator subscribes to the same market events the strategy sees</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 1.</b> Two source adapters converge on one byte stream; two venue adapters hang off one execution engine. Everything between them &mdash; decode, normalise, book, cache, strategy, exec, risk &mdash; is a single compiled artefact. Note the amber line wrapping under the diagram: the matching simulator consumes the <em>same</em> dispatched market events as the strategy, which is what keeps simulated fills consistent with what the strategy actually observed.</figcaption>
+  </figure>
+
+  <div class="legend">
+    <div class="lg"><svg width="46" height="12" aria-hidden="true"><defs><marker id="lg1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker></defs><line x1="2" y1="6" x2="38" y2="6" class="ln-core" marker-end="url(#lg1)"/></svg><span><b>solid</b> event or command flow</span></div>
+    <div class="lg"><svg width="46" height="12" aria-hidden="true"><defs><marker id="lg2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker></defs><line x1="2" y1="6" x2="38" y2="6" class="ln-core dash" marker-end="url(#lg2)"/></svg><span><b>dashed</b> direct read, no event</span></div>
+    <div class="lg"><svg width="46" height="12" aria-hidden="true"><rect x="2" y="1" width="36" height="10" rx="2" class="bx-core"/></svg><span><b>indigo</b> shared &mdash; both modes</span></div>
+    <div class="lg"><svg width="46" height="12" aria-hidden="true"><rect x="2" y="1" width="36" height="10" rx="2" class="bx-bt"/></svg><span><b>amber</b> backtest only</span></div>
+    <div class="lg"><svg width="46" height="12" aria-hidden="true"><rect x="2" y="1" width="36" height="10" rx="2" class="bx-live"/></svg><span><b>teal</b> live only</span></div>
+    <div class="lg"><svg width="46" height="12" aria-hidden="true"><rect x="2" y="1" width="36" height="10" rx="2" class="bx-ext"/></svg><span><b>dashed box</b> external system</span></div>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>What actually swaps</h2>
+    <p>Strip the detail away and the claim becomes checkable. Two adapters at the top, two at the bottom, one core in the middle that does not know or care which mode it is running in. If a component needs an <code>if backtest</code> branch inside it, it belongs at an edge, not in the core.</p>
+  </div>
+
+  <figure>
+    <div class="figbox">
+      <svg viewBox="0 0 1120 470" role="img" aria-label="Side by side comparison: the backtest configuration uses a replay feeder above and a matching simulator below; the live configuration uses UDP multicast with recovery above and an NNF CTCL gateway below; the core block between them is identical in both.">
+        <defs>
+          <marker id="a2c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker>
+          <marker id="a2b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-bt"/></marker>
+          <marker id="a2l" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-live"/></marker>
+        </defs>
+
+        <text x="60" y="30" class="t-zone f-bt">BACKTEST</text>
+        <text x="620" y="30" class="t-zone f-live">LIVE</text>
+
+        <rect x="60" y="48" width="440" height="58" rx="6" class="bx-bt"/>
+        <text x="280" y="73" class="t-ttl mid">Replay Feeder</text>
+        <text x="280" y="92" class="t-sub mid">file &#8594; packets, capture order</text>
+        <line x1="280" y1="106" x2="280" y2="164" class="ln-bt" marker-end="url(#a2b)"/>
+
+        <rect x="60" y="166" width="440" height="130" rx="8" class="band"/>
+        <text x="280" y="200" class="t-ttl mid f-core">SHARED CORE</text>
+        <text x="280" y="223" class="t-sub mid">decoder &middot; normalizer &middot; data engine</text>
+        <text x="280" y="243" class="t-sub mid">book builder &middot; cache &middot; strategy</text>
+        <text x="280" y="263" class="t-sub mid">execution engine &middot; risk &middot; portfolio</text>
+        <text x="280" y="285" class="t-sub mid f-core">zero mode-specific branches</text>
+
+        <line x1="280" y1="296" x2="280" y2="354" class="ln-bt" marker-end="url(#a2b)"/>
+        <rect x="60" y="356" width="440" height="58" rx="6" class="bx-bt"/>
+        <text x="280" y="381" class="t-ttl mid">Matching Simulator</text>
+        <text x="280" y="400" class="t-sub mid">queue overlay + latency model</text>
+
+        <rect x="620" y="48" width="440" height="58" rx="6" class="bx-live"/>
+        <text x="840" y="73" class="t-ttl mid">Multicast Receiver</text>
+        <text x="840" y="92" class="t-sub mid">A/B arbitration + TCP recovery</text>
+        <line x1="840" y1="106" x2="840" y2="164" class="ln-live" marker-end="url(#a2l)"/>
+
+        <rect x="620" y="166" width="440" height="130" rx="8" class="band"/>
+        <text x="840" y="200" class="t-ttl mid f-core">SHARED CORE</text>
+        <text x="840" y="223" class="t-sub mid">decoder &middot; normalizer &middot; data engine</text>
+        <text x="840" y="243" class="t-sub mid">book builder &middot; cache &middot; strategy</text>
+        <text x="840" y="263" class="t-sub mid">execution engine &middot; risk &middot; portfolio</text>
+        <text x="840" y="285" class="t-sub mid f-core">zero mode-specific branches</text>
+
+        <line x1="840" y1="296" x2="840" y2="354" class="ln-live" marker-end="url(#a2l)"/>
+        <rect x="620" y="356" width="440" height="58" rx="6" class="bx-live"/>
+        <text x="840" y="381" class="t-ttl mid">NNF / CTCL Gateway</text>
+        <text x="840" y="400" class="t-sub mid">real venue, real reports</text>
+
+        <line x1="504" y1="231" x2="616" y2="231" class="ln-core dash" marker-start="url(#a2c)" marker-end="url(#a2c)"/>
+        <text x="560" y="222" class="t-lbl mid f-core">identical</text>
+        <text x="560" y="450" class="t-lbl mid">same bytes in &#8594; same events &#8594; same decisions out</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 2.</b> The interface contract in one picture: an adapter above that produces raw packets, an adapter below that consumes order commands and produces execution reports. Swapping either one is a configuration change, not a code change.</figcaption>
+  </figure>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Component</th><th>Ownership</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>MTBT decoder</td><td><span class="pill p-core">shared</span></td><td>Same wire format either way &mdash; replayed bytes are recorded live bytes.</td></tr>
+        <tr><td>Normalizer</td><td><span class="pill p-core">shared</span></td><td>Epoch, tick scale and order-id conversion must never differ.</td></tr>
+        <tr><td>Book builder</td><td><span class="pill p-core">shared</span></td><td>Built once. Two books mean two chances to diverge.</td></tr>
+        <tr><td>Cache</td><td><span class="pill p-core">shared</span></td><td>Single source of truth for book, own orders, positions.</td></tr>
+        <tr><td>Strategy</td><td><span class="pill p-core">shared</span></td><td>The entire point. Not one line changes.</td></tr>
+        <tr><td>Execution engine</td><td><span class="pill p-core">shared</span></td><td>Order state machine is venue-agnostic.</td></tr>
+        <tr><td>Risk / portfolio</td><td><span class="pill p-core">shared</span></td><td>A limit you did not test is a limit you do not have.</td></tr>
+        <tr><td>Clock</td><td><span class="pill p-core">shared</span> <span class="pill p-bt">impl</span> <span class="pill p-live">impl</span></td><td>Same interface, two implementations. Injected, never read directly.</td></tr>
+        <tr><td>Replay feeder</td><td><span class="pill p-bt">backtest</span></td><td>Turns a file into the packet stream the core expects.</td></tr>
+        <tr><td>Matching simulator</td><td><span class="pill p-bt">backtest</span></td><td>Decides whether and when your order fills.</td></tr>
+        <tr><td>Multicast receiver</td><td><span class="pill p-live">live</span></td><td>A/B arbitration, gap detection, TCP recovery, snapshot bootstrap.</td></tr>
+        <tr><td>NNF / CTCL gateway</td><td><span class="pill p-live">live</span></td><td>Session management and wire encoding for real order entry.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>What keeps them identical</h2>
+    <p>Sharing the code is necessary but not sufficient &mdash; shared code can still behave differently if it can reach ambient state. These are the constraints that actually enforce parity.</p>
+  </div>
+  <div class="rules">
+    <div class="rule">
+      <span class="tagline">Injected time</span>
+      <h3>The strategy cannot read a clock</h3>
+      <p>No system clock, no <code>random()</code>, no direct logging or file I/O. Everything arrives through injected handles. In backtest the <code>SimClock</code> is advanced by event timestamps; in live the <code>LiveClock</code> free-runs. Same call site, same code.</p>
+    </div>
+    <div class="rule">
+      <span class="tagline">Byte-level replay</span>
+      <h3>Record raw packets, not parsed events</h3>
+      <p>Journal the undecoded multicast payload in live. The backtest then replays literally the same bytes through literally the same decoder, so decoder bugs reproduce instead of hiding.</p>
+    </div>
+    <div class="rule">
+      <span class="tagline">Capture order</span>
+      <h3>Do not sort by exchange timestamp</h3>
+      <p>Contracts are spread across streams with independent sequence numbers, and live cannot reorder across them. Replaying in capture order preserves the interleaving the strategy will really see.</p>
+    </div>
+    <div class="rule">
+      <span class="tagline">Modelled latency</span>
+      <h3>Orders arrive later than they are decided</h3>
+      <p>The simulator must insert the order at its simulated arrival time, competing with everything that arrived in between. Without this the backtest is a fantasy.</p>
+    </div>
+    <div class="rule">
+      <span class="tagline">Single thread</span>
+      <h3>The core is deterministic</h3>
+      <p>One thread from decode to order emission, fed by a ring buffer. Parallelise across runs &mdash; parameter sweeps, separate days &mdash; never within one.</p>
+    </div>
+    <div class="rule">
+      <span class="tagline">Explicit staleness</span>
+      <h3>The strategy is told when the book is wrong</h3>
+      <p>After a gap and before recovery completes the book is not trustworthy. <code>UNINIT / RECOVERING / OK / STALE</code> is visible state, so the strategy can stand down instead of trading noise.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Why the simulator cannot fill you at T</h2>
+    <p>This is the single largest source of backtest results that do not survive contact with production. Between the moment the exchange stamps an event and the moment your order reaches the matching engine, other participants have already acted.</p>
+  </div>
+
+  <figure>
+    <div class="figbox">
+      <svg viewBox="0 0 1200 400" role="img" aria-label="A timeline showing an exchange event at T0, the application receiving it after feed latency, the strategy deciding after decision latency, and the order arriving at the matching engine after send latency; several other market events arrive during the send window, so the order joins the queue behind them.">
+        <defs>
+          <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-line"/></marker>
+          <marker id="a3b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-bt"/></marker>
+        </defs>
+
+        <rect x="560" y="118" width="330" height="150" class="shade" rx="4"/>
+        <text x="725" y="140" class="t-lbl mid f-bt">market moves while your order is in flight</text>
+
+        <line x1="90" y1="230" x2="1140" y2="230" class="ln" marker-end="url(#a3)"/>
+        <text x="1140" y="256" class="t-lbl end">time</text>
+
+        <line x1="140" y1="222" x2="140" y2="238" class="ln"/>
+        <line x1="380" y1="222" x2="380" y2="238" class="ln"/>
+        <line x1="560" y1="222" x2="560" y2="238" class="ln"/>
+        <line x1="890" y1="222" x2="890" y2="238" class="ln"/>
+
+        <circle cx="140" cy="230" r="6" fill="var(--core)"/>
+        <circle cx="380" cy="230" r="6" fill="var(--core)"/>
+        <circle cx="560" cy="230" r="6" fill="var(--core)"/>
+        <circle cx="890" cy="230" r="6" fill="var(--bt)"/>
+
+        <text x="140" y="198" class="t-ttl-sm mid">exchange stamps</text>
+        <text x="140" y="215" class="t-sub mid">book changes</text>
+        <text x="380" y="198" class="t-ttl-sm mid">you see it</text>
+        <text x="380" y="215" class="t-sub mid">decoded</text>
+        <text x="560" y="198" class="t-ttl-sm mid">you decide</text>
+        <text x="560" y="215" class="t-sub mid">order emitted</text>
+        <text x="890" y="198" class="t-ttl-sm mid f-bt">order arrives</text>
+        <text x="890" y="215" class="t-sub mid f-bt">joins queue</text>
+
+        <line x1="140" y1="272" x2="380" y2="272" class="ln" marker-start="url(#a3)" marker-end="url(#a3)"/>
+        <text x="260" y="292" class="t-lbl mid">feed latency</text>
+        <line x1="380" y1="272" x2="560" y2="272" class="ln" marker-start="url(#a3)" marker-end="url(#a3)"/>
+        <text x="470" y="292" class="t-lbl mid">decide</text>
+        <line x1="560" y1="272" x2="890" y2="272" class="ln-bt" marker-start="url(#a3b)" marker-end="url(#a3b)"/>
+        <text x="725" y="292" class="t-lbl mid f-bt">send latency</text>
+
+        <text x="90" y="60" class="t-zone">OTHER PARTICIPANTS&#8217; ORDERS</text>
+        <polygon points="620,100 630,118 610,118" fill="var(--live)"/>
+        <polygon points="700,100 710,118 690,118" fill="var(--live)"/>
+        <polygon points="790,100 800,118 780,118" fill="var(--live)"/>
+        <polygon points="850,100 860,118 840,118" fill="var(--live)"/>
+        <line x1="620" y1="118" x2="620" y2="224" class="ln-live dash"/>
+        <line x1="700" y1="118" x2="700" y2="224" class="ln-live dash"/>
+        <line x1="790" y1="118" x2="790" y2="224" class="ln-live dash"/>
+        <line x1="850" y1="118" x2="850" y2="224" class="ln-live dash"/>
+
+        <rect x="700" y="320" width="440" height="56" rx="6" class="bx-bt"/>
+        <text x="920" y="344" class="t-ttl-sm mid">You are behind all four of them</text>
+        <text x="920" y="362" class="t-sub mid">naive backtests place you at the front instead</text>
+        <line x1="890" y1="238" x2="890" y2="318" class="ln-bt dash" marker-end="url(#a3b)"/>
+      </svg>
+    </div>
+    <figcaption><b>Figure 3.</b> A backtest that fills you at the decision instant silently deletes the send-latency window &mdash; and with it every competitor who queued ahead of you. Measure the real distribution from live NIC timestamps, then replay it.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Queue position without a second order book</h2>
+    <p>Your earlier question &mdash; who builds the LOB &mdash; resolves here. The book is built once in the core. The simulator adds only a small per-order overlay, so it never duplicates the book and never disagrees with what the strategy saw.</p>
+    <p>Because MTBT is order-by-order, you know the exact identity of every order ahead of yours. That means cancellations ahead of you can be tracked precisely, which is the part depth-based backtests can only estimate.</p>
+  </div>
+
+  <figure>
+    <div class="figbox">
+      <svg viewBox="0 0 1200 470" role="img" aria-label="A FIFO price level showing orders o1 through o5 with your order fourth in line; trades and cancellations of orders ahead reduce your quantity ahead, a cancellation behind you does not, and a quantity increase on an order ahead moves it to the back which also reduces your quantity ahead.">
+        <defs>
+          <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-line"/></marker>
+          <marker id="a4b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-bt"/></marker>
+        </defs>
+
+        <text x="60" y="34" class="t-zone f-core">CANONICAL BOOK &#8212; ONE PRICE LEVEL, BID SIDE</text>
+        <text x="60" y="54" class="t-sub">built once in the core &middot; FIFO by arrival &middot; front of queue at left</text>
+
+        <rect x="60" y="80" width="130" height="62" rx="5" class="bx-core"/>
+        <text x="125" y="106" class="t-ttl-sm mid">o1</text><text x="125" y="126" class="t-sub mid">75 lots</text>
+        <rect x="200" y="80" width="130" height="62" rx="5" class="bx-core"/>
+        <text x="265" y="106" class="t-ttl-sm mid">o2</text><text x="265" y="126" class="t-sub mid">40 lots</text>
+        <rect x="340" y="80" width="130" height="62" rx="5" class="bx-core"/>
+        <text x="405" y="106" class="t-ttl-sm mid">o3</text><text x="405" y="126" class="t-sub mid">60 lots</text>
+        <rect x="480" y="80" width="150" height="62" rx="5" class="bx-bt"/>
+        <text x="555" y="106" class="t-ttl-sm mid">YOUR ORDER</text><text x="555" y="126" class="t-sub mid">25 lots</text>
+        <rect x="640" y="80" width="130" height="62" rx="5" class="bx-core"/>
+        <text x="705" y="106" class="t-ttl-sm mid">o4</text><text x="705" y="126" class="t-sub mid">30 lots</text>
+        <rect x="780" y="80" width="130" height="62" rx="5" class="bx-core"/>
+        <text x="845" y="106" class="t-ttl-sm mid">o5</text><text x="845" y="126" class="t-sub mid">50 lots</text>
+
+        <line x1="60" y1="162" x2="470" y2="162" class="ln-bt" marker-start="url(#a4b)" marker-end="url(#a4b)"/>
+        <text x="265" y="182" class="t-lbl mid f-bt">qty_ahead = 175 lots &#8212; the only number the overlay stores</text>
+
+        <text x="60" y="234" class="t-zone">INCOMING EVENTS AND THEIR EFFECT</text>
+
+        <rect x="60" y="252" width="255" height="76" rx="6" class="bx"/>
+        <text x="76" y="276" class="t-ttl-sm">T &#8195;trade hits o1</text>
+        <text x="76" y="296" class="t-sub">o1 fully consumed</text>
+        <text x="76" y="316" class="t-sub f-bt">qty_ahead 175 &#8594; 100</text>
+        <line x1="125" y1="248" x2="125" y2="146" class="ln dash" marker-end="url(#a4)"/>
+
+        <rect x="335" y="252" width="255" height="76" rx="6" class="bx"/>
+        <text x="351" y="276" class="t-ttl-sm">X &#8195;cancel of o2</text>
+        <text x="351" y="296" class="t-sub">ahead of you &#8212; helps</text>
+        <text x="351" y="316" class="t-sub f-bt">qty_ahead 100 &#8594; 60</text>
+        <line x1="265" y1="248" x2="265" y2="146" class="ln dash" marker-end="url(#a4)"/>
+
+        <rect x="610" y="252" width="255" height="76" rx="6" class="bx"/>
+        <text x="626" y="276" class="t-ttl-sm">X &#8195;cancel of o5</text>
+        <text x="626" y="296" class="t-sub">behind you &#8212; irrelevant</text>
+        <text x="626" y="316" class="t-sub">qty_ahead unchanged</text>
+        <line x1="845" y1="248" x2="845" y2="146" class="ln dash" marker-end="url(#a4)"/>
+
+        <rect x="885" y="252" width="255" height="76" rx="6" class="bx"/>
+        <text x="901" y="276" class="t-ttl-sm">M &#8195;o3 raises qty</text>
+        <text x="901" y="296" class="t-sub">loses priority, goes to back</text>
+        <text x="901" y="316" class="t-sub f-bt">qty_ahead 60 &#8594; 0</text>
+        <line x1="405" y1="248" x2="405" y2="146" class="ln dash" marker-end="url(#a4)"/>
+
+        <rect x="60" y="360" width="530" height="86" rx="6" class="bx-bt"/>
+        <text x="76" y="386" class="t-ttl-sm">SIMULATOR OVERLAY &#8212; one record per open order</text>
+        <text x="76" y="410" class="t-sub">{ token, side, price_ticks, qty_ahead, own_qty, insert_seq }</text>
+        <text x="76" y="432" class="t-sub">O(1) per event &middot; sized by your open orders, not by the book</text>
+
+        <rect x="640" y="360" width="500" height="86" rx="6" class="bx-core"/>
+        <text x="656" y="386" class="t-ttl-sm">WHY NOT A SECOND BOOK</text>
+        <text x="656" y="410" class="t-sub">duplicating it halves throughput and doubles the</text>
+        <text x="656" y="432" class="t-sub">chance the simulator disagrees with the strategy</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 4.</b> The overlay never stores the book &mdash; it stores one integer per open order and updates it from the same event stream. <b>Cancellations ahead of you are a large share of queue depletion</b>, and order-by-order data is the only way to know which cancels were ahead. The priority rule on modify (quantity down keeps priority, price change or quantity up loses it) is exchange behaviour you must model yourself &mdash; it is not in the protocol spec.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Proving parity, not assuming it</h2>
+    <p>Sharing code makes divergence unlikely, not impossible. The journal closes the loop: because live records raw packets alongside every command and report, a production session can be re-run through the backtester and the two decision streams compared directly.</p>
+  </div>
+
+  <figure>
+    <div class="figbox">
+      <svg viewBox="0 0 1140 400" role="img" aria-label="A cycle: a live session writes raw packets, commands and reports to a journal; the journal is replayed through the same core; the resulting decisions are diffed against the recorded live decisions; any divergence is a bug that is fixed and fed back into the live session.">
+        <defs>
+          <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker>
+        </defs>
+
+        <rect x="50" y="60" width="240" height="80" rx="6" class="bx-live"/>
+        <text x="170" y="94" class="t-ttl mid">Live session</text>
+        <text x="170" y="114" class="t-sub mid">real feed, real venue</text>
+
+        <line x1="290" y1="100" x2="368" y2="100" class="ln-core" marker-end="url(#a5)"/>
+        <text x="329" y="90" class="t-lbl mid">writes</text>
+
+        <rect x="370" y="60" width="240" height="80" rx="6" class="bx"/>
+        <text x="490" y="88" class="t-ttl mid">JOURNAL</text>
+        <text x="490" y="107" class="t-sub mid">raw packets &middot; commands</text>
+        <text x="490" y="124" class="t-sub mid">reports &middot; clock reads</text>
+
+        <line x1="610" y1="100" x2="688" y2="100" class="ln-core" marker-end="url(#a5)"/>
+        <text x="649" y="90" class="t-lbl mid">feeds</text>
+
+        <rect x="690" y="60" width="240" height="80" rx="6" class="bx-bt"/>
+        <text x="810" y="94" class="t-ttl mid">Replayed</text>
+        <text x="810" y="114" class="t-sub mid">through the same core</text>
+
+        <polyline points="810,140 810,190 570,190 570,232" class="ln-core" marker-end="url(#a5)"/>
+        <polyline points="170,140 170,190 410,190 410,232" class="ln-core" marker-end="url(#a5)"/>
+        <text x="490" y="182" class="t-lbl mid">two decision streams</text>
+
+        <rect x="370" y="234" width="240" height="80" rx="6" class="bx-core"/>
+        <text x="490" y="268" class="t-ttl mid">DIFF</text>
+        <text x="490" y="288" class="t-sub mid">order-for-order comparison</text>
+
+        <line x1="368" y1="274" x2="292" y2="274" class="ln-core" marker-end="url(#a5)"/>
+        <rect x="50" y="234" width="240" height="80" rx="6" class="bx"/>
+        <text x="170" y="262" class="t-ttl-sm mid">Identical</text>
+        <text x="170" y="281" class="t-sub mid">parity holds &#8212; ship it</text>
+        <text x="170" y="299" class="t-sub mid">re-run every release</text>
+
+        <line x1="612" y1="274" x2="688" y2="274" class="ln-core" marker-end="url(#a5)"/>
+        <rect x="690" y="234" width="240" height="80" rx="6" class="bx-bt"/>
+        <text x="810" y="262" class="t-ttl-sm mid">Divergent</text>
+        <text x="810" y="281" class="t-sub mid">ambient state leaked in</text>
+        <text x="810" y="299" class="t-sub mid">a bug, always</text>
+
+        <polyline points="930,274 1000,274 1000,100 934,100" class="ln-core dash" marker-end="url(#a5)"/>
+        <text x="1010" y="192" class="t-lbl">fix, re-run</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 5.</b> Any divergence between the live decision stream and its replay is a defect &mdash; the strategy reached ambient state it should not have been able to touch. Build the journal before the first strategy, because retrofitting it later means re-running every result you have already trusted.</figcaption>
+  </figure>
+</section>
+
+</div>
+</body></html>
