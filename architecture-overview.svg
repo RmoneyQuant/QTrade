@@ -193,9 +193,13 @@
 <text x="1005" y="1202" class="t-sub mid">2. RMS &#8212; trait; phase 1 passes all</text>
 <text x="1005" y="1220" class="t-sub mid">3. OTR governor &#8212; budget</text>
 <text x="1005" y="1240" class="t-sub mid f-core">local reject &#8594; synchronous return</text>
-<rect x="790" y="1266" width="430" height="46" rx="6" class="bx-core"/>
+<rect x="790" y="1266" width="430" height="62" rx="6" class="bx-core"/>
 <text x="1005" y="1288" class="t-ttl-sm mid">WATCHDOG</text>
 <text x="1005" y="1305" class="t-sub mid">declared-dependency staleness &#8594; cancel</text>
+<text x="1005" y="1321" class="t-sub mid f-core">a Scheduler handler, not a component</text>
+<polyline points="1232,572 1292,572 1292,1297 1226,1297" class="ln-core dash" marker-end="url(#a1c)"/>
+<text x="1300" y="930" class="t-lbl f-core">WatchdogCheck</text>
+<text x="1300" y="946" class="t-lbl f-core">events fire here</text>
 
 <!-- control plane -->
 <rect x="360" y="1060" width="380" height="66" rx="6" class="bx-core"/>
