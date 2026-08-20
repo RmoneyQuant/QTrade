@@ -6,10 +6,6 @@ A single engine that runs the same compiled code for backtesting and live tradin
 
 ### System and modes
 
-**Engine**:
-The whole system, comprising the Core plus its Feed Adapters and venue edge.
-_Avoid_: backtester, platform
-
 **Backtest Mode**:
 A run driven by recorded data against a Simulated Exchange.
 _Avoid_: backtest (as a noun for the system), simulation mode
@@ -18,16 +14,20 @@ _Avoid_: backtest (as a noun for the system), simulation mode
 A run driven by real feeds against a real Exchange Gateway.
 _Avoid_: production mode, real mode
 
-**Core**:
-The exchange-agnostic, mode-agnostic component containing the Scheduler, Data Engine, BookBuilder, Cache, strategy host, ExecutionEngine and Order Validation.
-_Avoid_: core (lowercase, which reads as CPU core), engine core, kernel
+**qtrade**:
+The exchange- and mode-agnostic engine: Scheduler, Data Engine, BookBuilder, Cache, strategy host, ExecutionEngine, RMS and Order Validation. Feed Adapters and the venue edge plug into it; they are not part of it.
+_Avoid_: Core, Engine, engine core, kernel, backtester
+
+**qtrade process**:
+One running instance — qtrade plus whichever Feed Adapters and venue edge the configuration wires in.
+_Avoid_: Engine, application, node, trading node
 
 **CPU core**:
 A physical processor core. Always written in full.
 _Avoid_: core
 
 **Run**:
-One execution of the Engine over a defined data range with a fixed configuration and strategy set.
+One execution of qtrade over a defined data range with a fixed configuration and strategy set.
 _Avoid_: test, session, simulation
 
 ### Data path
@@ -61,7 +61,7 @@ The component capturing raw messages and timestamps to durable storage during a 
 _Avoid_: capture, logger
 
 **Journal**:
-The record of the post-merge stream in Core consumption order, together with every command and report, used to verify that a Live run replays identically.
+The record of the post-merge stream in qtrade consumption order, together with every command and report, used to verify that a Live run replays identically.
 _Avoid_: log, audit trail
 
 **Stream**:
@@ -191,5 +191,19 @@ The movement of the mid price at fixed horizons after a fill, used to measure ad
 _Avoid_: slippage, post-trade drift
 
 **Latency Model**:
-The component determining how long orders and reports take to travel between the Engine and a venue.
+The component determining how long orders and reports take to travel between qtrade and a venue.
 _Avoid_: delay model, latency simulation
+
+### Industry terms mapped
+
+**OMS**:
+Not used as a term here. What the industry calls an order management system is split across the **ExecutionEngine** (lifecycle logic) and the **Cache** (order state). Naming it as one component would imply a single thing that does not exist.
+_Avoid_: OMS, order manager
+
+**EMS**:
+Not used. Order routing is a single venue per order with no smart routing, and parent/child order slicing is deliberately out of scope.
+_Avoid_: EMS, execution management system
+
+**Pre-trade risk**:
+Split into two distinct gates that must not be conflated: **Order Validation** (stateless, will the venue accept it) and **RMS** (stateful policy, should we send it).
+_Avoid_: pre-trade risk as a single concept

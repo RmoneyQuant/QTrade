@@ -1,0 +1,256 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1720 1700" role="img" aria-label="Complete architecture. Deployment configuration feeds the live transports; run configuration feeds the qtrade. An MCX adapter and a Quincy adapter each have a live and replay transport converging on one decoder, normalizer and instrument filter. Both feed a Sequencer, with a Recorder capturing alongside. The qtrade contains scheduler and clock, data engine, book builder, cache, event dispatcher, strategies, cost model, execution engine, validation, control dispatcher and reporting. Order commands leave to either the simulated exchange or the MCX ETI gateway, and both return execution reports to the execution engine.">
+<style>
+.bx{fill:#FFFFFF;stroke:#8E96AE;stroke-width:1.5}
+.bx-core{fill:#FFFFFF;stroke:#2A46A8;stroke-width:1.7}
+.bx-bt{fill:#FBF1DE;stroke:#A16207;stroke-width:1.5}
+.bx-live{fill:#DCF2EF;stroke:#0B7A72;stroke-width:1.5}
+.bx-ext{fill:none;stroke:#565D78;stroke-width:1.5;stroke-dasharray:7 5}
+.band{fill:#E8ECFA;stroke:#2A46A8;stroke-width:2}
+.grp{fill:none;stroke:#8E96AE;stroke-width:1.4;stroke-dasharray:6 5}
+.tab{fill:#2A46A8}
+.ln{stroke:#8E96AE;stroke-width:1.8;fill:none;stroke-linejoin:round;stroke-linecap:round}
+.ln-core{stroke:#2A46A8;stroke-width:1.9;fill:none;stroke-linejoin:round;stroke-linecap:round}
+.ln-bt{stroke:#A16207;stroke-width:1.8;fill:none;stroke-linejoin:round;stroke-linecap:round}
+.ln-live{stroke:#0B7A72;stroke-width:1.8;fill:none;stroke-linejoin:round;stroke-linecap:round}
+.dash{stroke-dasharray:5 4}
+.mk-line{fill:#8E96AE}.mk-core{fill:#2A46A8}.mk-bt{fill:#A16207}.mk-live{fill:#0B7A72}
+.t-ttl{font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14.5px;font-weight:600;fill:#14172A}
+.t-ttl-sm{font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:13px;font-weight:600;fill:#14172A}
+.t-sub{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11px;fill:#565D78}
+.t-lbl{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11px;fill:#565D78}
+.t-zone{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;font-weight:600;letter-spacing:.11em;fill:#565D78}
+.t-tab{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;font-weight:600;letter-spacing:.1em;fill:#FFFFFF}
+.f-bt{fill:#A16207}.f-live{fill:#0B7A72}.f-core{fill:#2A46A8}
+.mid{text-anchor:middle}.end{text-anchor:end}
+</style>
+<rect x="0" y="0" width="1720" height="1700" fill="#FFFFFF"/>
+<defs>
+<marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-line"/></marker>
+<marker id="a1c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker>
+<marker id="a1b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-bt"/></marker>
+<marker id="a1l" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-live"/></marker>
+</defs>
+
+<text x="30" y="30" class="t-zone">CONFIGURATION</text>
+<text x="330" y="30" class="t-zone">FEED ADAPTERS &#8212; ONE PER PROTOCOL, EACH ON ITS OWN THREAD</text>
+
+<!-- config rail -->
+<rect x="30" y="110" width="210" height="210" rx="8" class="bx-live"/>
+<text x="135" y="136" class="t-ttl-sm mid">CONFIG &#91;deployment&#93;</text>
+
+<text x="135" y="158" class="t-sub mid f-live">NOT hashed</text>
+<line x1="46" y1="184" x2="224" y2="184" stroke="var(--line)" stroke-width="1"/>
+<text x="46" y="205" class="t-sub">multicast groups</text>
+<text x="46" y="225" class="t-sub">ports &middot; interfaces</text>
+<text x="46" y="245" class="t-sub">A/B service pairs</text>
+<text x="46" y="265" class="t-sub">credential refs only</text>
+<text x="46" y="285" class="t-sub">prod|UAT|sim</text>
+<text x="46" y="308" class="t-sub">restart to change</text>
+<polyline points="242,180 300,180 300,124 344,124" class="ln-live" marker-end="url(#a1l)"/>
+<text x="250" y="146" class="t-lbl f-live">to all transports</text>
+
+<rect x="30" y="640" width="210" height="260" rx="8" class="bx-core"/>
+<text x="135" y="666" class="t-ttl-sm mid">CONFIG &#91;run&#93;</text>
+<text x="135" y="685" class="t-sub mid f-core">hashed &#8594; run identity</text>
+<text x="135" y="702" class="t-sub mid f-core">(config, build)</text>
+<line x1="46" y1="713" x2="224" y2="713" stroke="var(--line)" stroke-width="1"/>
+<text x="46" y="734" class="t-sub">recordings + hashes</text>
+<text x="46" y="754" class="t-sub">full strategy set</text>
+<text x="46" y="774" class="t-sub">params &middot; latency seed</text>
+<text x="46" y="794" class="t-sub">OTR + validation</text>
+<text x="46" y="814" class="t-sub">switches</text>
+<text x="46" y="834" class="t-sub">warmup + bootstrap</text>
+<text x="46" y="854" class="t-sub">calendar version</text>
+<text x="46" y="874" class="t-sub">mode: backtest | live</text>
+<line x1="242" y1="770" x2="314" y2="770" class="ln-core" marker-end="url(#a1c)"/>
+
+<!-- MCX adapter -->
+<rect x="330" y="60" width="650" height="270" rx="10" class="grp"/>
+<text x="346" y="82" class="t-lbl f-core">MCX ADAPTER &#8212; adapter thread</text>
+<rect x="348" y="96" width="300" height="52" rx="6" class="bx-live"/>
+<text x="498" y="118" class="t-ttl-sm mid">Live Transport</text>
+<text x="498" y="137" class="t-sub mid">multicast &middot; A/B &middot; recovery</text>
+<rect x="664" y="96" width="300" height="52" rx="6" class="bx-bt"/>
+<text x="814" y="118" class="t-ttl-sm mid">Replay Transport</text>
+<text x="814" y="137" class="t-sub mid">recorded messages</text>
+<line x1="498" y1="148" x2="498" y2="174" class="ln-live" marker-end="url(#a1l)"/>
+<line x1="814" y1="148" x2="814" y2="174" class="ln-bt" marker-end="url(#a1b)"/>
+<rect x="348" y="176" width="616" height="54" rx="6" class="bx-core"/>
+<text x="656" y="199" class="t-ttl mid">MCX T7 EOBI DECODER</text>
+<text x="656" y="219" class="t-sub mid">13100 &middot; 13101 &middot; 13106 &middot; 13102 &middot; 13104/5 &middot; 13300/1</text>
+<line x1="656" y1="230" x2="656" y2="246" class="ln-core" marker-end="url(#a1c)"/>
+<rect x="348" y="248" width="616" height="54" rx="6" class="bx-core"/>
+<text x="656" y="270" class="t-ttl-sm mid">NORMALIZE &#8594; FILTER</text>
+<text x="656" y="290" class="t-sub mid">i64 ns &middot; i64 ticks &middot; filter on SecurityID</text>
+
+<!-- Quincy adapter -->
+<rect x="1040" y="60" width="650" height="270" rx="10" class="grp"/>
+<text x="1056" y="82" class="t-lbl f-core">QUINCY ADAPTER &#8212; adapter thread &middot; serves CME + DGCX</text>
+<rect x="1058" y="96" width="300" height="52" rx="6" class="bx-live"/>
+<text x="1208" y="118" class="t-ttl-sm mid">Live Transport</text>
+<text x="1208" y="137" class="t-sub mid">QED feed</text>
+<rect x="1374" y="96" width="300" height="52" rx="6" class="bx-bt"/>
+<text x="1524" y="118" class="t-ttl-sm mid">Replay Transport</text>
+<text x="1524" y="137" class="t-sub mid">recorded messages</text>
+<line x1="1208" y1="148" x2="1208" y2="174" class="ln-live" marker-end="url(#a1l)"/>
+<line x1="1524" y1="148" x2="1524" y2="174" class="ln-bt" marker-end="url(#a1b)"/>
+<rect x="1058" y="176" width="616" height="54" rx="6" class="bx-core"/>
+<text x="1366" y="199" class="t-ttl mid">QUINCY QED DECODER</text>
+<text x="1366" y="219" class="t-sub mid">vendor-normalised &middot; MBP &middot; wire format TBC</text>
+<line x1="1366" y1="230" x2="1366" y2="246" class="ln-core" marker-end="url(#a1c)"/>
+<rect x="1058" y="248" width="616" height="54" rx="6" class="bx-core"/>
+<text x="1366" y="270" class="t-ttl-sm mid">NORMALIZE &#8594; FILTER</text>
+<text x="1366" y="290" class="t-sub mid">CME 5 deep &middot; DGCX BBO</text>
+
+<!-- sequencer + recorder -->
+<polyline points="656,304 656,346 830,346" class="ln-core"/>
+<polyline points="1366,304 1366,346 850,346" class="ln-core"/>
+<line x1="840" y1="346" x2="840" y2="364" class="ln-core" marker-end="url(#a1c)"/>
+<rect x="620" y="366" width="440" height="66" rx="6" class="bx"/>
+<text x="840" y="391" class="t-ttl mid">SEQUENCER</text>
+<text x="840" y="410" class="t-sub mid">merge on (capture_ts, source_id, seq)</text>
+<text x="840" y="426" class="t-sub mid">deterministic by data, not thread timing</text>
+
+<rect x="1140" y="366" width="330" height="66" rx="6" class="bx-live"/>
+<text x="1305" y="391" class="t-ttl-sm mid">RECORDER &#8212; live only</text>
+<text x="1305" y="410" class="t-sub mid">per-stream raw + post-merge journal</text>
+<text x="1305" y="426" class="t-sub mid">bounded ring &middot; drop and alarm</text>
+<line x1="1062" y1="399" x2="1136" y2="399" class="ln-live dash" marker-end="url(#a1l)"/>
+
+<line x1="840" y1="432" x2="840" y2="466" class="ln-core" marker-end="url(#a1c)"/>
+
+<!-- CORE -->
+<rect x="320" y="470" width="1370" height="940" rx="14" class="band"/>
+<rect x="320" y="470" width="620" height="34" rx="6" class="tab"/>
+<text x="340" y="492" class="t-tab">QTRADE &#8212; ONE THREAD &middot; ONE BINARY &middot; BOTH MODES</text>
+
+<rect x="780" y="530" width="450" height="86" rx="6" class="bx-core"/>
+<text x="1005" y="556" class="t-ttl mid">SCHEDULER + CLOCK</text>
+<text x="1005" y="576" class="t-sub mid">priority queue &middot; (ts, class, seq)</text>
+<text x="1005" y="593" class="t-sub mid">the only thing that advances time</text>
+<text x="1005" y="609" class="t-sub mid f-core">monotonic order &middot; wall clock for meaning</text>
+<line x1="1005" y1="616" x2="1005" y2="634" class="ln-core" marker-end="url(#a1c)"/>
+
+<rect x="780" y="636" width="450" height="60" rx="6" class="bx-core"/>
+<text x="1005" y="660" class="t-ttl mid">DATA ENGINE</text>
+<text x="1005" y="679" class="t-sub mid">subscriptions &middot; session phase &middot; book state</text>
+
+<polyline points="1005,696 1005,716 550,716 550,736" class="ln-core" marker-end="url(#a1c)"/>
+<polyline points="1005,696 1005,716 1470,716 1470,736" class="ln-core" marker-end="url(#a1c)"/>
+
+<rect x="360" y="738" width="380" height="68" rx="6" class="bx-core"/>
+<text x="550" y="762" class="t-ttl mid">BOOK BUILDER</text>
+<text x="550" y="781" class="t-sub mid">one book per filtered instrument</text>
+<text x="550" y="798" class="t-sub mid">MboBook (MCX) | MbpBook (CME, DGCX)</text>
+
+<rect x="1280" y="738" width="380" height="68" rx="6" class="bx-core"/>
+<text x="1470" y="762" class="t-ttl mid">EVENT DISPATCHER</text>
+<text x="1470" y="781" class="t-sub mid">keyed (instrument, depth)</text>
+<text x="1470" y="798" class="t-sub mid">static dispatch &middot; no allocation</text>
+
+<line x1="550" y1="806" x2="550" y2="834" class="ln-core" marker-end="url(#a1c)"/>
+<rect x="360" y="836" width="380" height="196" rx="6" class="bx-core"/>
+<text x="550" y="860" class="t-ttl mid">CACHE</text>
+<line x1="378" y1="870" x2="722" y2="870" stroke="var(--line)" stroke-width="1"/>
+<text x="378" y="892" class="t-sub">books &middot; UNINIT/RECOVERING/OK/STALE</text>
+<text x="378" y="914" class="t-sub">session state per venue</text>
+<text x="378" y="936" class="t-sub">sub-account &middot; firm aggregate</text>
+<text x="378" y="958" class="t-sub">own orders (the OMS state)</text>
+<text x="378" y="980" class="t-sub">reference data + instrument kinds</text>
+<text x="378" y="1000" class="t-sub">warmup + reconciliation gates</text>
+<text x="378" y="1018" class="t-sub f-core">read-only to strategies</text>
+
+<rect x="1280" y="836" width="380" height="120" rx="6" class="bx-core"/>
+<text x="1470" y="860" class="t-ttl mid">STRATEGY &times; N</text>
+<text x="1470" y="880" class="t-sub mid">fair value &middot; skew &middot; roll &middot; filter</text>
+<text x="1470" y="898" class="t-sub mid">declares signal dependencies</text>
+<text x="1470" y="916" class="t-sub mid">publishes named time series</text>
+<text x="1470" y="934" class="t-sub mid">no wall clock &middot; no rng &middot; no I/O</text>
+<text x="1470" y="950" class="t-sub mid f-core">inline on the qtrade thread</text>
+<line x1="1470" y1="806" x2="1470" y2="834" class="ln-core" marker-end="url(#a1c)"/>
+<line x1="742" y1="890" x2="1276" y2="890" class="ln-core dash" marker-end="url(#a1c)"/>
+<text x="1009" y="882" class="t-lbl mid">read-only views</text>
+
+<rect x="1280" y="972" width="380" height="54" rx="6" class="bx-core"/>
+<text x="1470" y="994" class="t-ttl-sm mid">COST MODEL</text>
+<text x="1470" y="1012" class="t-sub mid">round-trip cost, queryable pre-quote</text>
+<line x1="1470" y1="956" x2="1470" y2="970" class="ln-core dash" marker-end="url(#a1c)"/>
+
+<polyline points="1278,920 1246,920 1246,1040 1005,1040 1005,1058" class="ln-core" marker-end="url(#a1c)"/>
+<text x="1120" y="1032" class="t-lbl mid">submit &middot; cancel &middot; modify</text>
+
+<rect x="790" y="1060" width="430" height="60" rx="6" class="bx-core"/>
+<text x="1005" y="1084" class="t-ttl mid">EXECUTION ENGINE</text>
+<text x="1005" y="1103" class="t-sub mid">order state machine &middot; reconciliation</text>
+
+<polyline points="788,1080 620,1080 620,1034" class="ln-core dash" marker-end="url(#a1c)"/>
+<text x="628" y="1098" class="t-lbl">positions</text>
+
+<line x1="1005" y1="1120" x2="1005" y2="1138" class="ln-core" marker-end="url(#a1c)"/>
+<rect x="790" y="1140" width="430" height="112" rx="6" class="bx-core"/>
+<text x="1005" y="1164" class="t-ttl mid">THREE GATES</text>
+<text x="1005" y="1184" class="t-sub mid">1. VALIDATION &#8212; tick size &middot; freeze qty</text>
+<text x="1005" y="1202" class="t-sub mid">2. RMS &#8212; trait; phase 1 passes all</text>
+<text x="1005" y="1220" class="t-sub mid">3. OTR governor &#8212; budget</text>
+<text x="1005" y="1240" class="t-sub mid f-core">local reject &#8594; synchronous return</text>
+<rect x="790" y="1266" width="430" height="46" rx="6" class="bx-core"/>
+<text x="1005" y="1288" class="t-ttl-sm mid">WATCHDOG</text>
+<text x="1005" y="1305" class="t-sub mid">declared-dependency staleness &#8594; cancel</text>
+
+<!-- control plane -->
+<rect x="360" y="1060" width="380" height="66" rx="6" class="bx-core"/>
+<text x="550" y="1084" class="t-ttl mid">CONTROL DISPATCHER</text>
+<text x="550" y="1103" class="t-sub mid">typed handler lists &middot; low rate</text>
+<text x="550" y="1119" class="t-sub mid">observers added by wiring</text>
+<line x1="788" y1="1093" x2="744" y2="1093" class="ln-core" marker-end="url(#a1c)"/>
+
+<rect x="360" y="1156" width="380" height="146" rx="6" class="bx-bt"/>
+<text x="550" y="1180" class="t-ttl mid">REPORTING &middot; ALERTS &middot; JOURNAL</text>
+<line x1="378" y1="1190" x2="722" y2="1190" stroke="var(--bt)" stroke-width="1" opacity=".35"/>
+<text x="378" y="1212" class="t-sub">tier 1 &#8212; P&amp;L, inventory, markout, OTR</text>
+<text x="378" y="1234" class="t-sub">tier 2 &#8212; every order, queue pos per fill</text>
+<text x="378" y="1256" class="t-sub">tier 3 &#8212; strategy time series</text>
+<text x="378" y="1278" class="t-sub">alerts &middot; journal (live)</text>
+<text x="378" y="1296" class="t-sub f-bt">every output embeds the run spec + hashes</text>
+<line x1="550" y1="1126" x2="550" y2="1154" class="ln-core" marker-end="url(#a1c)"/>
+
+<line x1="1005" y1="1312" x2="1005" y2="1424" class="ln-core"/>
+
+<!-- venue edge -->
+<text x="360" y="1444" class="t-zone f-bt">BACKTEST VENUE</text>
+<text x="1150" y="1444" class="t-zone f-live">LIVE VENUE</text>
+<polyline points="1005,1424 620,1424 620,1452" class="ln-core" marker-end="url(#a1c)"/>
+<polyline points="1005,1424 1385,1424 1385,1452" class="ln-core" marker-end="url(#a1c)"/>
+<text x="1017" y="1416" class="t-lbl f-core">order commands</text>
+
+<rect x="340" y="1456" width="560" height="168" rx="6" class="bx-bt"/>
+<text x="620" y="1482" class="t-ttl mid">SIMULATED EXCHANGE</text>
+<line x1="358" y1="1492" x2="882" y2="1492" stroke="var(--bt)" stroke-width="1" opacity=".35"/>
+<text x="358" y="1514" class="t-sub">its own books &#8212; no path into the qtrade</text>
+<text x="358" y="1536" class="t-sub">latency &middot; queue position &middot; price-time</text>
+<text x="358" y="1558" class="t-sub">BOC reject &middot; MMP &middot; OTR &middot; STP</text>
+<text x="358" y="1580" class="t-sub">Lean cancel on session loss &amp; EOD</text>
+<text x="358" y="1602" class="t-sub">Market-to-Limit residual rests</text>
+<text x="358" y="1618" class="t-sub f-bt">same filtered instrument set</text>
+
+<rect x="1150" y="1456" width="470" height="62" rx="6" class="bx-live"/>
+<text x="1385" y="1481" class="t-ttl mid">MCX ETI GATEWAY</text>
+<text x="1385" y="1500" class="t-sub mid">binary, FIX 5.0 SP2 semantics</text>
+<rect x="1150" y="1556" width="470" height="56" rx="6" class="bx-ext"/>
+<text x="1385" y="1580" class="t-ttl mid">MCX MATCHING ENGINE</text>
+<text x="1385" y="1598" class="t-sub mid">external</text>
+<line x1="1300" y1="1518" x2="1300" y2="1554" class="ln-live" marker-end="url(#a1l)"/>
+<line x1="1470" y1="1554" x2="1470" y2="1518" class="ln-live" marker-end="url(#a1l)"/>
+
+<!-- returns -->
+<polyline points="902,1540 1702,1540 1702,1082 1224,1082" class="ln-bt" marker-end="url(#a1b)"/>
+<text x="1694" y="1072" class="t-lbl end f-bt">simulated reports</text>
+<polyline points="1622,1487 1668,1487 1668,1104 1224,1104" class="ln-live" marker-end="url(#a1l)"/>
+<text x="1240" y="1124" class="t-lbl f-live">execution reports</text>
+
+<polyline points="618,399 292,399 292,1520 336,1520" class="ln-bt" marker-end="url(#a1b)"/>
+<text x="300" y="1552" class="t-lbl f-bt">normalized events &#8212; direct to the simulator,</text>
+<text x="300" y="1570" class="t-lbl f-bt">never via the qtrade</text>
+
+<text x="860" y="1668" class="t-lbl mid">adapter threads feed the qtrade thread through bounded queues &#8212; ordering fixed by data, not by scheduling</text>
+</svg>

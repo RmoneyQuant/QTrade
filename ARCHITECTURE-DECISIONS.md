@@ -1,6 +1,6 @@
 # Trading Engine — Architecture Decisions
 
-**Status:** Design complete for phase 1. All 32 decisions settled.
+**Status:** Design complete for phase 1. All 40 decisions settled.
 **Last updated:** 2026-08-19
 
 > **This is the decision log — the *why*.** It records what was decided, what was rejected, and the reasoning, so a future reader does not have to reconstruct it.
@@ -11,8 +11,9 @@
 |---|---|
 | [CONTEXT.md](CONTEXT.md) | **What things are called** — the glossary |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | **What the system is** — requirements, components, event flow, build order |
-| **ARCHITECTURE-DECISIONS.md** *(this file)* | **Why it is that way** — decisions D01–D32 |
+| **ARCHITECTURE-DECISIONS.md** *(this file)* | **Why it is that way** — decisions D01–D40 |
 | [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) | **What is still unresolved** — with question sets for Quincy and MCX |
+| [STRATEGY-GUIDE.md](STRATEGY-GUIDE.md) | **How to write a strategy** — the `Strategy` trait, context handle, worked example |
 
 ---
 
@@ -50,15 +51,15 @@ Terms retired during design, deliberately unused across this document set:
 | "data engine" meaning a file reader | **Transport** | Collided with **Data Engine**, which owns subscriptions and book state |
 | "LOB" | **Order Book** | |
 | "simulated fill engine" | **Simulated Exchange** | It is a venue, not a calculator (D10) |
-| "core" (lowercase) | **Core** or **CPU core** | The two senses collided and caused real confusion mid-design |
-| "backtester" | **Engine** (system) / **Backtest Mode** (mode) | Meant both the system and one of its modes |
+| "Core" / "Engine" | **qtrade** | The two senses collided and caused real confusion mid-design |
+| "backtester" | **qtrade** (the engine) / **Backtest Mode** (the run mode) | Meant both the system and one of its modes |
 
 ---
 
 ## 3. Decision log
 
 ### D01 — Implementation language: Rust
-**Decision:** Rust for the Core, adapters and Simulated Exchange. 
+**Decision:** Rust for qtrade, its adapters and Simulated Exchange. 
 
 **Why:** Python is eliminated because order-book construction is a sequential state machine — data-dependent pointer chasing with no vectorisation available, so numpy/numba offer no escape. Between Rust and C++, the deciding factors were that MTBT-style packed structs read from network buffers are exactly where memory bugs live, and that **a corrupted book does not crash — it produces plausible wrong fills** that could be trusted for weeks. Greenfield repo, so no legacy C++ pull.
 
@@ -70,7 +71,7 @@ Terms retired during design, deliberately unused across this document set:
 **Decision:** Colocated sub-millisecond userspace with ordinary sockets for phase 1. Kernel bypass is a committed later phase, not a possibility.
 
 **Consequences:**
-- The `LiveTransport` boundary must stay genuinely clean — no socket-specific assumption may leak into the Decoder or Core, or bypass becomes a rewrite instead of a swap.
+- The `LiveTransport` boundary must stay genuinely clean — no socket-specific assumption may leak into the Decoder or qtrade, or bypass becomes a rewrite instead of a swap.
 - NUMA placement and CPU-core pinning are **deferred, not cancelled**. They return in the same phase as bypass.
 
 **Noted risk:** Quincy microwave data buys a latency edge measured in microseconds; ordinary kernel sockets spend a meaningful part of it. Acceptable as build-order (correctness first), but it makes the bypass phase more urgent than "eventually."
@@ -88,10 +89,10 @@ Terms retired during design, deliberately unused across this document set:
 
 ---
 
-### D04 — Single-threaded Core, separate ingestion threads
-**Decision:** The Core runs on one thread. Feed Adapters run on their own threads doing receive → decode → normalise, pushing internal events to the Core through bounded queues.
+### D04 — Single-threaded qtrade, separate ingestion threads
+**Decision:** qtrade runs on one thread. Feed Adapters run on their own threads doing receive → decode → normalise, pushing internal events to qtrade through bounded queues.
 
-**Why:** A single-threaded Core makes backtests reproducible by construction. Adapter threads keep decode work off the Core thread without affecting ordering.
+**Why:** A single-threaded qtrade makes backtests reproducible by construction. Adapter threads keep decode work off qtrade thread without affecting ordering.
 
 **Also decided:** An explicit **offload mechanism** for expensive work (e.g. future volatility surface recalibration) — the result returns as a *scheduled event*, not a blocking call, so determinism holds and the quoting loop is never stalled.
 
@@ -104,7 +105,7 @@ Terms retired during design, deliberately unused across this document set:
 
 **Decision — both mechanisms, for different jobs:**
 
-1. **Post-merge journal (live)** — the journal is written *after* merge, in the exact order the Core consumed events. Replaying it needs no merge at all. **Used only for live-vs-backtest parity verification.**
+1. **Post-merge journal (live)** — the journal is written *after* merge, in the exact order qtrade consumed events. Replaying it needs no merge at all. **Used only for live-vs-backtest parity verification.**
 2. **Deterministic k-way merge** — each adapter has its own ring; the Sequencer pops the earliest by `(capture_timestamp, source_id, sequence_number)`. **Used for strategy development**, and required for vendor-supplied per-venue files.
 
 **Merge on capture timestamp, never exchange timestamp** — venue clocks are not comparable, and exchange time would hand strategies a cleaner cross-venue view than they can ever have live.
@@ -122,7 +123,7 @@ Terms retired during design, deliberately unused across this document set:
 ### D06 — One order book per subscribed instrument, shared
 **Decision:** One book instance per subscribed instrument, owned by the BookBuilder, exposed read-only through the Cache. Strategies maintain their own **derived** state (microprice, imbalance, fair value) on top.
 
-**Why:** The original case for per-strategy books rested on avoiding lock contention and preserving CPU-core locality — both arguments about *threads*. With a single-threaded Core (D04) neither applies. Duplicating books would multiply the system's most expensive operation by strategy count, on the one thread that also runs all strategy logic, and would introduce N books that are supposed to be identical but might not be.
+**Why:** The original case for per-strategy books rested on avoiding lock contention and preserving CPU-core locality — both arguments about *threads*. With a single-threaded qtrade (D04) neither applies. Duplicating books would multiply the system's most expensive operation by strategy count, on the one thread that also runs all strategy logic, and would introduce N books that are supposed to be identical but might not be.
 
 ---
 
@@ -133,7 +134,7 @@ Terms retired during design, deliberately unused across this document set:
 
 **Routing knowledge lives in startup wiring, never inside either dispatcher.**
 
-**Why:** A message bus buys decoupling across threads — locks, queues, scheduled delivery. With a single-threaded Core none of that machinery has work to do. The term itself is retired because it implies queueing and async semantics this design deliberately does not have.
+**Why:** A message bus buys decoupling across threads — locks, queues, scheduled delivery. With a single-threaded qtrade none of that machinery has work to do. The term itself is retired because it implies queueing and async semantics this design deliberately does not have.
 
 ---
 
@@ -163,13 +164,13 @@ Terms retired during design, deliberately unused across this document set:
 ---
 
 ### D10 — Simulated Exchange is fully independent
-**Decision:** The Simulated Exchange builds **its own order books** directly from the normalized event stream. It has **no read path into the Cache** and no shared state with the Core. The only interface is order commands in, execution reports out — identical to the live gateway.
+**Decision:** The Simulated Exchange builds **its own order books** directly from the normalized event stream. It has **no read path into the Cache** and no shared state with qtrade. The only interface is order commands in, execution reports out — identical to the live gateway.
 
 **Why:** In production the venue is not inside your process. If the simulator read your Cache you would create a coupling that does not exist live. Sharper still: your feed-derived book can go `STALE` after a packet gap, but **a real exchange does not become uncertain because your receiver dropped packets** — a simulator reading your Cache would inherit your corruption and fill you against a book that never existed.
 
 **Cost is smaller than it appears:** the simulator only needs books for instruments you actually *trade*, not everything you subscribe to.
 
-**Also gained:** the simulator becomes unit-testable against synthetic order flow with zero Core dependency.
+**Also gained:** the simulator becomes unit-testable against synthetic order flow with zero qtrade dependency.
 
 ---
 
@@ -239,7 +240,7 @@ Terms retired during design, deliberately unused across this document set:
 - **MCX** — exchange messages (`Product State Change 13300`, `Instrument State Change 13301`), in live *and* in backtest, because the recording contains them.
 - **CME / DGCX via Quincy** — whatever Quincy provides; if it publishes no state, then calendar plus data-presence inference, **in both modes**.
 
-**Rejected:** calendar in backtest, exchange messages in live. That would put a **mode-specific branch inside the Core**, and three things follow: unscheduled halts (`110 Volatility Interruption`, `105 Product State Halt`) would never appear in a backtest; open/close timing would differ from real jitter; and it repeats the D14 mistake of leaving the least-tested code on the most critical path.
+**Rejected:** calendar in backtest, exchange messages in live. That would put a **mode-specific branch inside qtrade**, and three things follow: unscheduled halts (`110 Volatility Interruption`, `105 Product State Halt`) would never appear in a backtest; open/close timing would differ from real jitter; and it repeats the D14 mistake of leaving the least-tested code on the most critical path.
 
 **The calendar's actual jobs, in both modes:** run planning (which trading days exist) and **anomaly detection** (the expectation against which reality is checked — this is what makes FR-04 meaningful).
 
@@ -299,8 +300,161 @@ They **do not share state**, preserving the venue independence of D10. Each coun
 
 ---
 
+### D40 — Client order ID: injected session id plus monotonic counter
+**Decision:**
+
+```
+ClOrdId = (session_id, counter)
+
+  session_id   injected at startup
+                 Live      → seconds since epoch at process start
+                 Backtest  → deterministic value from [run] config
+  counter      monotonic u64, +1 per order, never reset within a session
+```
+
+**Why not pure wall-clock time**, despite it being the natural instinct: it would **break determinism**. A backtest run twice would produce different client order IDs, violating FR-12's byte-identical output requirement. The ID scheme itself would make runs non-reproducible.
+
+**Why a counter is required alongside:** in Backtest Mode the **SimClock does not advance within a callback**. A market maker submitting a bid and an ask inside one `on_book()` gets the identical timestamp for both — the clock only moves when the Scheduler pops the next event. That is the normal path for every quote update, not an edge case.
+
+**What each part provides:**
+
+| Part | Provides |
+|---|---|
+| `session_id` | Restart uniqueness with no durable state; identifies which session created an order — the property D38 reconciliation needs |
+| `counter` | Uniqueness within a frozen SimClock instant |
+| Injected, not read | Backtest determinism preserved; live gets genuine restart-uniqueness |
+
+**Same pattern as `SimClock`/`LiveClock` (D30) and the seeded latency model (D18):** one interface, two sources, no mode branch in calling code.
+
+**To verify before fixing the encoding:** MCX ETI's `ClOrdID` field type and width. A `u64` allows roughly 24 bits of session and 40 of counter; a narrower or string-typed field changes the split. A lookup, not a decision.
+
+---
+
+### D39 — One config file, two sections, one hash
+**Decision:** A single file passed as `qtrade <config>`, containing two sections. **Only `[run]` is hashed into run identity.**
+
+```
+[run]         → hashed
+  mode (backtest | live), start_date, end_date, recording paths,
+  strategy set + parameters, latency model + seed,
+  warmup window, bootstrap mode, calendar + master versions,
+  session-boundary mode (D29)
+
+[deployment]  → NOT hashed
+  multicast groups, ports, interfaces, A/B pairs,
+  CTCL id, credential references, environment (prod|UAT|sim)
+```
+
+**Why the split, concretely.** Move to a different colocation rack, update the endpoints, and re-run an identical backtest: the result is byte-identical, because a backtest reads files and never touches an IP — but the config hash changed, so tooling treats it as a different experiment. The inverse is worse: two runs show different hashes and someone concludes a parameter changed when only an endpoint moved. **Hash what changes results; do not hash what does not.** In Backtest Mode the endpoints are literally unused.
+
+**Mode lives in `[run]` and is hashed** — it changes everything about a run.
+
+**Config does not restrict instruments.** Strategies declare their own instrument filter programmatically (D32); config carries run scoping and connectivity only. Config supplies parameters *to* a strategy; it does not decide what data the strategy wants.
+
+**Credentials are referenced, never inline** — `password_env = "MCX_ETI_PASSWORD"`, so the file holds a name rather than a secret.
+
+**The published run record contains `[run]` only.** Publishing the full config would write credentials into logs that get shipped to support and pasted into tickets. `[run]` is also the only part that determines results, so it is the only part worth reproducing.
+
+---
+
+### D38 — Restart recovery: orders, positions and reconciliation
+**Decision:** On a mid-day restart, **ETI position download is the authoritative source**, reconciled against the journal. **Quoting is blocked until reconciliation completes** — the same gate FR-15 applies to an uninitialised book. Any mismatch raises an **alert**, never a silent adoption of the venue's number.
+
+**Orders are largely solved by an earlier choice.** D13 selected Lean orders for quoting, which are non-persistent and session-scoped. **If the ETI session drops when the process dies, MCX has already cancelled the quotes** — the process restarts into a market with nothing resting. That is the dead-man's switch working as designed. Standard orders survive and need explicit reconciliation.
+
+**Positions are the real exposure.** A position does not vanish when a session drops. A market maker restarting while holding inventory and believing itself flat will skew the wrong way and accumulate further in the same direction.
+
+**Why the journal alone is insufficient:** it cannot know about anything that happened while the process was down. Why reconcile rather than simply trust the venue: a discrepancy between the two usually indicates a defect worth surfacing.
+
+---
+
+### D37 — Instrument type taxonomy
+**Decision:** Define the full taxonomy now; implement **`Future`** in phase 1 with **`Spread`** as a stub.
+
+```
+InstrumentKind:
+  Future  { underlying, expiry, contract_month, settlement: Cash | Physical }
+  Option  { underlying, expiry, strike, right: Call|Put, exercise, settlement }
+  Equity  { series }
+  Spread  { leg1, leg2 }
+```
+
+Common metadata alongside (D15): venue, tick size, lot size, multiplier, freeze quantity, price band, currency.
+
+**Why it is needed in phase 1, not when options arrive:** **CTT is levied differently on futures (on turnover) and options (on premium)**, so the Cost Model needs instrument kind now — and D23 already puts the Cost Model on the hot path, queryable pre-quote. A flat instrument record cannot answer it.
+
+**Also depends on kind:** margin computation (later RMS, D34), settlement handling, whether Greeks are meaningful, and how roll queries are expressed.
+
+**Why now rather than later:** the taxonomy costs little to write today and is invasive to retrofit once the Cost Model, Cache and reference-data loader have all assumed everything is a future. NSE arriving later brings both `Equity` and `Option` at once.
+
+---
+
+### D36 — Order rejection: local gates are synchronous, venue responses are events
+**Decision:** An order passes three gates — **Order Validation → RMS → OTR governor** — before reaching the venue. **Local gate rejections return synchronously** from `submit_order()`. **Venue responses arrive as scheduled events** on `on_order_update`.
+
+**Why not uniform:** the two are genuinely different events, not two flavours of one.
+
+| | Local gate reject | Venue reject |
+|---|---|---|
+| Rejected by | Validation / RMS / OTR, inside qtrade | MCX or the Simulated Exchange |
+| Did the order leave? | **No** | **Yes** |
+| Latency | **Zero** | Outbound + inbound |
+| Strategy learns via | Synchronous return | Scheduled event |
+
+A local check rejects in-process in nanoseconds; nothing travelled. Making the strategy wait for an event would model a delay that does not exist.
+
+**The distinction is operationally useful.** A local reject means *no time has passed* — the book is unchanged, so correcting the price and resubmitting immediately is valid. A venue reject means *a full round trip elapsed* — the market has moved, and resubmitting the same quote is likely wrong.
+
+**Uniform regardless:** the ExecutionEngine assigns a client order ID and creates the order record **before** the gates, so a locally-rejected order still exists, still transitions to `REJECTED`, still appears in the Cache and reporting, and still counts toward OTR if it reached that gate. Nothing vanishes because it was stopped early.
+
+**Reason codes distinguish** own limit, firm limit, and venue rejection in both paths (D08).
+
+---
+
+### D35 — Data aggregation deferred to phase 2
+**Decision:** Bars and other aggregated data (time bars, tick bars, volume bars) are **not in phase 1**. Phase-1 strategies consume raw book and trade events only.
+
+**When it arrives, it belongs in the engine, not the strategy** — unlike fair value (D09). Two reasons: bar boundaries are **clock-driven**, so a one-minute bar closes on a Scheduler timer and must behave identically in both modes; and if N strategies each aggregate independently they will eventually disagree about what a given bar contains. Bar aggregation is generic infrastructure carrying no domain knowledge, which is precisely the test D09 applies.
+
+**Subscription shape when added:** the same Control Dispatcher path as book and trade subscriptions, with a typed request — book at depth N, trades, or bars at interval X.
+
+---
+
+### D34 — RMS is a trait; phase 1 passes everything through
+**Decision:** Risk management is a **trait with swappable implementations**. The phase-1 implementation answers one question — *should this order go to the exchange, yes or no?* — and **always answers yes**. No throttling, no limits.
+
+**Why a trait rather than deferral:** the same pattern as the latency model (D18). The call site exists from day one, so later implementations slot in without touching the ExecutionEngine.
+
+**Distinct from Order Validation (D17), which is active in phase 1.** Order Validation asks *will the exchange accept this order* — tick size, freeze quantity — and is stateless reference-data checking. RMS asks *should we send it*, and is stateful policy.
+
+**Margin and cash belong to later RMS implementations.** They are neither stateless validation nor discretionary policy but a physical constraint: exhaust margin and the clearing member squares you off regardless of intent. A simplified initial-margin model (per-lot or percent-of-notional from contract specs) would capture the binding constraint without SPAN file ingestion; full SPAN plus ELM is a later swappable margin model.
+
+**Consequence accepted:** a phase-1 backtest **cannot show that a strategy would have been margin-called**. Immaterial for a market maker staying near flat; material as soon as inventory is carried.
+
+---
+
+### D33 — Two dispatchers, because they are two different lookups
+**Decision:** Event Dispatcher and Control Dispatcher remain separate. **The justification is cost per call and coupling — not threading.**
+
+**Correcting the original reasoning:** the split was first argued partly on thread-safety grounds ("no locks, no queues to cross"). With a single-threaded qtrade (D04) that argument does not hold — both are function calls. It should not have been leaned on.
+
+**What actually justifies it.** The two workloads want opposite things from a dispatch mechanism:
+
+- **Market data** fires on every message — a lookup keyed by `(instrument, depth)` into a pre-sized array, no allocation, no dynamic dispatch. Fast and rigid.
+- **Control traffic** — commands, reports, session changes, alerts — fires thousands of times a day. Typed messages and observers added by wiring, so Reporting can observe execution reports **without the ExecutionEngine knowing Reporting exists**.
+
+One mechanism forces a choice: fast and rigid means adding an observer edits publishers; flexible means paying a hashmap lookup and dynamic dispatch on every book update.
+
+**The sharper form:** these were never going to be one thing. A lookup keyed by *instrument and depth* and a lookup keyed by *message type* are structurally different and would share no implementation under any name. The split is **naming two things that already exist separately**, not machinery being added. It is two functions and two subscriber structures, not two subsystems.
+
+**Where the objection would be valid:** a generic pub/sub framework with topic strings and registration APIs would be unjustified weight for a single-threaded qtrade. That is explicitly not what this is. If either dispatcher grows a topic registry, revisit.
+
+**Subscriptions route over the Control Dispatcher.** The split is not "data versus orders" but *direction and rate*: Event Dispatcher carries market data outward at high rate; Control Dispatcher carries commands inward and reports outward at low rate. `Strategy → subscribe() → Control Dispatcher → Data Engine`, which then updates the filter and the Event Dispatcher's routing table.
+
+---
+
 ### D32 — Instrument filtering is declared programmatically by the strategy
-**Decision:** The strategy declares its instrument filter **in code**, resolved against the day's instrument master via D15's metadata query at `on_start`. The filter is applied **immediately after decode, keyed on `SecurityID`**, before normalisation and before any book work. Both the Core **and the Simulated Exchange** build books for that same set.
+**Decision:** The strategy declares its instrument filter **in code**, resolved against the day's instrument master via D15's metadata query at `on_start`. The filter is applied **immediately after decode, keyed on `SecurityID`**, before normalisation and before any book work. Both qtrade **and the Simulated Exchange** build books for that same set.
 
 **Why it belongs in the strategy:** D15 already puts roll policy there, so the strategy is the component that knows which contracts it will want — *including ones it has not rolled into yet*. A predicate such as "CRUDEOIL, front two expiries" naturally includes next month's contract, so **when the strategy rolls, the book is already built with full history**. No universe declaration duplicated between run config and strategy code.
 
@@ -435,7 +589,7 @@ Design constraints:
 
 **The full book is still maintained** (D06 unchanged) — subscription governs **waking, not access**. A strategy can reach any depth on demand through the Cache.
 
-**Why not fire on every change:** order-by-order data means a callback for an order added at the eighth price level, which no market maker cares about. The strategy's first line becomes "has the BBO changed? no? return" — the engine woke it to be told to go back to sleep, on the one Core thread.
+**Why not fire on every change:** order-by-order data means a callback for an order added at the eighth price level, which no market maker cares about. The strategy's first line becomes "has the BBO changed? no? return" — the engine woke it to be told to go back to sleep, on the one qtrade thread.
 
 **Why not coalesce over time:** batching would be cheapest, and parity would hold since both modes would coalesce identically, but **it directly costs reaction time**. Coalescing to save CPU while paying for Quincy microwave data works against the whole point.
 
@@ -601,7 +755,7 @@ Integrated, normalised, low-latency feed carrying **select** data from multiple 
 
 ## 5. Event flow
 
-### The Core loop
+### qtrade loop
 One thread, one loop. Everything else is a consequence of what is in the queue.
 
 ```
@@ -663,7 +817,7 @@ Modelled outbound latency 250µs.
 
 **FR-06** — Recordings preserve product and instrument state messages. *(Per D16.)*
 
-**FR-07** — Live writes a post-merge journal in Core consumption order, reserved for parity verification.
+**FR-07** — Live writes a post-merge journal in qtrade consumption order, reserved for parity verification.
 
 ### Validation and control
 
@@ -683,7 +837,7 @@ Modelled outbound latency 250µs.
 
 **FR-15** — **A book that is `UNINIT` or `RECOVERING` prevents quoting.** Enforced via D28's watchdog, since the trading venue's own book is a declared dependency. A strategy must never quote into a market whose state it has not yet established.
 
-**FR-12** — A recorded live session replayed through the Core produces an identical decision stream. Any divergence is a defect.
+**FR-12** — A recorded live session replayed through qtrade produces an identical decision stream. Any divergence is a defect.
 
 ---
 

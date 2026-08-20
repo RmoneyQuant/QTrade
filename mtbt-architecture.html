@@ -29,164 +29,141 @@
   --bt:#E3A94B; --bt-tint:#312610;
   --live:#45C7BE; --live-tint:#0B2E2C;
 }
-
 *{box-sizing:border-box}
-body{
-  margin:0; background:var(--bg); color:var(--ink);
-  font-family:'IBM Plex Sans',system-ui,sans-serif;
-  font-size:16px; line-height:1.62;
-  -webkit-font-smoothing:antialiased;
-}
-.wrap{max-width:1240px; margin:0 auto; padding:0 24px 96px;
-  display:flex; flex-direction:column; gap:56px}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:16px;line-height:1.62;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1240px;margin:0 auto;padding:0 24px 96px;display:flex;flex-direction:column;gap:56px}
 .col{max-width:var(--measure)}
-
-header{padding:72px 0 0; display:flex; flex-direction:column; gap:20px}
-.eyebrow{font-family:'IBM Plex Mono',monospace; font-size:12px; font-weight:600;
-  letter-spacing:.16em; text-transform:uppercase; color:var(--core); margin:0}
-h1{font-family:'Archivo',system-ui,sans-serif; font-weight:700;
-  font-size:clamp(2.3rem,5.5vw,3.6rem); line-height:1.04; letter-spacing:-.02em;
-  margin:0; text-wrap:balance}
-.lede{font-size:1.13rem; color:var(--muted); margin:0; max-width:62ch}
-.lede strong{color:var(--ink); font-weight:600}
-.meta{display:flex; flex-wrap:wrap; gap:8px; margin-top:4px}
-.chip{font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.04em;
-  padding:5px 11px; border-radius:100px; border:1px solid var(--line);
-  background:var(--surface); color:var(--muted)}
-.chip.c-core{border-color:var(--core); color:var(--core)}
-.chip.c-bt{border-color:var(--bt); color:var(--bt)}
-.chip.c-live{border-color:var(--live); color:var(--live)}
-
-section{display:flex; flex-direction:column; gap:22px}
-h2{font-family:'Archivo',system-ui,sans-serif; font-weight:600;
-  font-size:clamp(1.45rem,2.8vw,1.95rem); line-height:1.16; letter-spacing:-.012em;
-  margin:0; text-wrap:balance}
-h3{font-family:'Archivo',system-ui,sans-serif; font-weight:600; font-size:1.06rem;
-  margin:0 0 2px; letter-spacing:-.005em}
+header{padding:72px 0 0;display:flex;flex-direction:column;gap:20px}
+.eyebrow{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--core);margin:0}
+h1{font-family:'Archivo',system-ui,sans-serif;font-weight:700;
+  font-size:clamp(2.3rem,5.5vw,3.6rem);line-height:1.04;letter-spacing:-.02em;margin:0;text-wrap:balance}
+.lede{font-size:1.13rem;color:var(--muted);margin:0;max-width:62ch}
+.lede strong{color:var(--ink);font-weight:600}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.chip{font-family:'IBM Plex Mono',monospace;font-size:11.5px;letter-spacing:.04em;
+  padding:5px 11px;border-radius:100px;border:1px solid var(--line);
+  background:var(--surface);color:var(--muted)}
+.chip.c-core{border-color:var(--core);color:var(--core)}
+.chip.c-bt{border-color:var(--bt);color:var(--bt)}
+.chip.c-live{border-color:var(--live);color:var(--live)}
+section{display:flex;flex-direction:column;gap:22px}
+h2{font-family:'Archivo',system-ui,sans-serif;font-weight:600;
+  font-size:clamp(1.45rem,2.8vw,1.95rem);line-height:1.16;letter-spacing:-.012em;margin:0;text-wrap:balance}
+h3{font-family:'Archivo',system-ui,sans-serif;font-weight:600;font-size:1.06rem;margin:0 0 2px;letter-spacing:-.005em}
 p{margin:0}
 .col p + p{margin-top:14px}
-code{font-family:'IBM Plex Mono',monospace; font-size:.87em;
-  background:var(--surface-2); padding:1.5px 5px; border-radius:4px}
+code{font-family:'IBM Plex Mono',monospace;font-size:.87em;background:var(--surface-2);padding:1.5px 5px;border-radius:4px}
 a{color:var(--core)}
-:focus-visible{outline:2.5px solid var(--core); outline-offset:3px; border-radius:3px}
-
-figure{margin:0; display:flex; flex-direction:column; gap:14px}
-.figbox{background:var(--surface); border:1px solid var(--line);
-  border-radius:12px; padding:20px; overflow-x:auto}
-.figbox svg{display:block; min-width:640px; max-width:100%; height:auto; margin:0 auto}
-figcaption{font-size:.93rem; color:var(--muted); max-width:74ch}
-figcaption b{color:var(--ink); font-weight:600}
-
-.bx{fill:var(--surface); stroke:var(--line-strong); stroke-width:1.5}
-.bx-core{fill:var(--surface); stroke:var(--core); stroke-width:1.7}
-.bx-bt{fill:var(--bt-tint); stroke:var(--bt); stroke-width:1.5}
-.bx-live{fill:var(--live-tint); stroke:var(--live); stroke-width:1.5}
-.bx-ext{fill:none; stroke:var(--muted); stroke-width:1.5; stroke-dasharray:7 5}
-.band{fill:var(--core-tint); stroke:var(--core); stroke-width:2}
-.band-soft{fill:var(--core-tint); stroke:var(--core); stroke-width:1.6}
+:focus-visible{outline:2.5px solid var(--core);outline-offset:3px;border-radius:3px}
+figure{margin:0;display:flex;flex-direction:column;gap:14px}
+.figbox{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px;overflow-x:auto}
+.figbox svg{display:block;min-width:640px;max-width:100%;height:auto;margin:0 auto}
+figcaption{font-size:.93rem;color:var(--muted);max-width:74ch}
+figcaption b{color:var(--ink);font-weight:600}
+.bx{fill:var(--surface);stroke:var(--line-strong);stroke-width:1.5}
+.bx-core{fill:var(--surface);stroke:var(--core);stroke-width:1.7}
+.bx-bt{fill:var(--bt-tint);stroke:var(--bt);stroke-width:1.5}
+.bx-live{fill:var(--live-tint);stroke:var(--live);stroke-width:1.5}
+.bx-ext{fill:none;stroke:var(--muted);stroke-width:1.5;stroke-dasharray:7 5}
+.band{fill:var(--core-tint);stroke:var(--core);stroke-width:2}
+.grp{fill:none;stroke:var(--line-strong);stroke-width:1.4;stroke-dasharray:6 5}
 .tab{fill:var(--core)}
 .shade{fill:var(--bt-tint)}
-
-.ln{stroke:var(--line-strong); stroke-width:1.8; fill:none;
-  stroke-linejoin:round; stroke-linecap:round}
-.ln-core{stroke:var(--core); stroke-width:1.9; fill:none;
-  stroke-linejoin:round; stroke-linecap:round}
-.ln-bt{stroke:var(--bt); stroke-width:1.8; fill:none;
-  stroke-linejoin:round; stroke-linecap:round}
-.ln-live{stroke:var(--live); stroke-width:1.8; fill:none;
-  stroke-linejoin:round; stroke-linecap:round}
+.ln{stroke:var(--line-strong);stroke-width:1.8;fill:none;stroke-linejoin:round;stroke-linecap:round}
+.ln-core{stroke:var(--core);stroke-width:1.9;fill:none;stroke-linejoin:round;stroke-linecap:round}
+.ln-bt{stroke:var(--bt);stroke-width:1.8;fill:none;stroke-linejoin:round;stroke-linecap:round}
+.ln-live{stroke:var(--live);stroke-width:1.8;fill:none;stroke-linejoin:round;stroke-linecap:round}
 .dash{stroke-dasharray:5 4}
-
 .mk-line{fill:var(--line-strong)}
 .mk-core{fill:var(--core)}
 .mk-bt{fill:var(--bt)}
 .mk-live{fill:var(--live)}
-
-.t-ttl{font-family:'IBM Plex Sans',sans-serif; font-size:14.5px; font-weight:600; fill:var(--ink)}
-.t-ttl-sm{font-family:'IBM Plex Sans',sans-serif; font-size:13px; font-weight:600; fill:var(--ink)}
-.t-sub{font-family:'IBM Plex Mono',monospace; font-size:11px; fill:var(--muted)}
-.t-lbl{font-family:'IBM Plex Mono',monospace; font-size:11px; fill:var(--muted)}
-.t-zone{font-family:'IBM Plex Mono',monospace; font-size:12px; font-weight:600; letter-spacing:.11em; fill:var(--muted)}
-.t-tab{font-family:'IBM Plex Mono',monospace; font-size:12px; font-weight:600;
-  letter-spacing:.1em; fill:var(--core-on)}
-.f-bt{fill:var(--bt)} .f-live{fill:var(--live)} .f-core{fill:var(--core)} .f-ink{fill:var(--ink)}
-.mid{text-anchor:middle} .end{text-anchor:end}
-
-.legend{display:grid; grid-template-columns:repeat(auto-fit,minmax(215px,1fr)); gap:12px 26px;
-  padding:18px 20px; background:var(--surface); border:1px solid var(--line); border-radius:12px}
-.lg{display:flex; align-items:center; gap:11px; font-size:.87rem; color:var(--muted)}
+.t-ttl{font-family:'IBM Plex Sans',sans-serif;font-size:14.5px;font-weight:600;fill:var(--ink)}
+.t-ttl-sm{font-family:'IBM Plex Sans',sans-serif;font-size:13px;font-weight:600;fill:var(--ink)}
+.t-sub{font-family:'IBM Plex Mono',monospace;font-size:11px;fill:var(--muted)}
+.t-lbl{font-family:'IBM Plex Mono',monospace;font-size:11px;fill:var(--muted)}
+.t-zone{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;letter-spacing:.11em;fill:var(--muted)}
+.t-tab{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;letter-spacing:.1em;fill:var(--core-on)}
+.f-bt{fill:var(--bt)}.f-live{fill:var(--live)}.f-core{fill:var(--core)}.f-ink{fill:var(--ink)}
+.mid{text-anchor:middle}.end{text-anchor:end}
+.legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:12px 26px;
+  padding:18px 20px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+.lg{display:flex;align-items:center;gap:11px;font-size:.87rem;color:var(--muted)}
 .lg svg{flex:none}
-.lg b{color:var(--ink); font-weight:600; font-family:'IBM Plex Mono',monospace; font-size:.83rem}
-
-.tablewrap{overflow-x:auto; border:1px solid var(--line); border-radius:12px; background:var(--surface)}
-table{border-collapse:collapse; width:100%; min-width:660px; font-size:.92rem}
-th,td{text-align:left; padding:13px 18px; border-bottom:1px solid var(--line); vertical-align:top}
-thead th{font-family:'IBM Plex Mono',monospace; font-size:11px; font-weight:600;
-  letter-spacing:.1em; text-transform:uppercase; color:var(--muted);
-  background:var(--surface-2); white-space:nowrap}
+.lg b{color:var(--ink);font-weight:600;font-family:'IBM Plex Mono',monospace;font-size:.83rem}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:660px;font-size:.92rem}
+th,td{text-align:left;padding:13px 18px;border-bottom:1px solid var(--line);vertical-align:top}
+thead th{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);background:var(--surface-2);white-space:nowrap}
 tbody tr:last-child td{border-bottom:none}
-td:first-child{font-family:'IBM Plex Mono',monospace; font-size:.85rem; white-space:nowrap; color:var(--ink)}
-.pill{display:inline-block; font-family:'IBM Plex Mono',monospace; font-size:10.5px;
-  font-weight:600; letter-spacing:.06em; padding:3px 9px; border-radius:100px; white-space:nowrap}
-.p-core{background:var(--core-tint); color:var(--core)}
-.p-bt{background:var(--bt-tint); color:var(--bt)}
-.p-live{background:var(--live-tint); color:var(--live)}
-
-.rules{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:2px;
-  background:var(--line); border:1px solid var(--line); border-radius:12px; overflow:hidden}
-.rule{background:var(--surface); padding:20px 22px; display:flex; flex-direction:column; gap:7px}
-.rule p{font-size:.92rem; color:var(--muted)}
-.rule .tagline{font-family:'IBM Plex Mono',monospace; font-size:10.5px; font-weight:600;
-  letter-spacing:.1em; text-transform:uppercase; color:var(--core)}
-
-.callout{border:1px solid var(--bt); background:var(--bt-tint); border-radius:12px;
-  padding:20px 24px; display:flex; flex-direction:column; gap:8px; max-width:78ch}
-.callout .tagline{font-family:'IBM Plex Mono',monospace; font-size:10.5px; font-weight:600;
-  letter-spacing:.1em; text-transform:uppercase; color:var(--bt)}
-.callout h3{color:var(--ink)}
-.callout p{font-size:.94rem; color:var(--ink); opacity:.86}
-
-.codeblock{background:var(--surface); border:1px solid var(--line); border-radius:12px;
-  padding:18px 22px; overflow-x:auto; font-family:'IBM Plex Mono',monospace;
-  font-size:.83rem; line-height:1.75; color:var(--ink); white-space:pre}
-.codeblock .cm{color:var(--muted)}
-
-@media (prefers-reduced-motion:no-preference){
-  a,.chip{transition:color .15s ease, border-color .15s ease}
-}
-@media (max-width:640px){
-  header{padding-top:48px}
-  .wrap{gap:44px; padding:0 16px 64px}
-  .figbox{padding:12px}
-}
+td:first-child{font-family:'IBM Plex Mono',monospace;font-size:.85rem;white-space:nowrap;color:var(--ink)}
+.pill{display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:600;
+  letter-spacing:.06em;padding:3px 9px;border-radius:100px;white-space:nowrap}
+.p-core{background:var(--core-tint);color:var(--core)}
+.p-bt{background:var(--bt-tint);color:var(--bt)}
+.p-live{background:var(--live-tint);color:var(--live)}
+.rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:2px;
+  background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.rule{background:var(--surface);padding:20px 22px;display:flex;flex-direction:column;gap:7px}
+.rule p{font-size:.92rem;color:var(--muted)}
+.rule .tagline{font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--core)}
+.callout{border:1px solid var(--bt);background:var(--bt-tint);border-radius:12px;padding:20px 24px;
+  display:flex;flex-direction:column;gap:8px;max-width:78ch}
+.callout .tagline{font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--bt)}
+.callout p{font-size:.94rem;color:var(--ink);opacity:.86}
+@media (max-width:640px){header{padding-top:48px}.wrap{gap:44px;padding:0 16px 64px}.figbox{padding:12px}}
 </style>
 
 <div class="wrap">
 
 <header>
-  <p class="eyebrow">Multi-exchange backtest &amp; live engine</p>
+  <p class="eyebrow">MCX market making &middot; backtest &amp; live engine</p>
   <h1>One Binary, Two Modes</h1>
-  <p class="lede">One exchange-agnostic core, compiled once, running unchanged in backtest and in production. Exchanges plug in at the top through per-venue decoders; the venue plugs in at the bottom. <strong>Nothing in the core knows which exchange or which mode it is running.</strong></p>
+  <p class="lede">One exchange-agnostic qtrade, compiled once, running unchanged in backtesting and production. Venues plug in above through per-protocol adapters; the venue plugs in below. <strong>Nothing in the qtrade knows which exchange or which mode it is running.</strong></p>
   <div class="meta">
-    <span class="chip c-core">shared core</span>
+    <span class="chip c-core">shared qtrade</span>
     <span class="chip c-bt">backtest-only edge</span>
     <span class="chip c-live">live-only edge</span>
-    <span class="chip">NSE CM + FO first</span>
-    <span class="chip">MCX &middot; CME later</span>
-    <span class="chip">discrete-event clock</span>
+    <span class="chip">MCX Crude &amp; Nat Gas</span>
+    <span class="chip">MBO queue position</span>
+    <span class="chip">32 decisions</span>
   </div>
 </header>
 
 <section>
   <div class="col">
-    <h2>Three layers, not two</h2>
-    <p>The earlier draft pushed raw packets into a decoder inside the core. That only works for one protocol. With NSE, MCX and CME the decoder has to move out to the exchange edge, which splits the system into three layers rather than two.</p>
-    <p><strong>Transport</strong> differs per exchange <em>and</em> per mode &mdash; a UDP receiver or a file reader. <strong>Decoder and normaliser</strong> differ per exchange but are shared across modes, and this is where the parity guarantee actually lives: the NSE decoder is one piece of code driving both the live path and the replay path. <strong>The core</strong> is common to everything and sees only internal event types.</p>
+    <h2>Phase 1</h2>
+    <p>Market making in MCX Crude Oil and Natural Gas futures, priced from CME and a USD/INR rate. Two Feed Adapters serve three venues &mdash; an adapter is defined by <em>provider and protocol</em>, not by exchange, because Quincy delivers CME and DGCX over a single normalised feed.</p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Venue</th><th>Role</th><th>Book</th><th>Depth</th><th>Adapter</th></tr></thead>
+      <tbody>
+        <tr><td>MCX</td><td>Trading venue &mdash; we quote here</td><td><span class="pill p-core">MBO</span></td><td>full</td><td>MCX T7 EOBI, direct multicast</td></tr>
+        <tr><td>CME</td><td>Price signal</td><td><span class="pill p-bt">MBP</span></td><td>5 levels</td><td>Quincy QED</td></tr>
+        <tr><td>DGCX / GME</td><td>USD/INR signal</td><td><span class="pill p-bt">MBP</span></td><td>1 (BBO)</td><td>Quincy QED</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ FIGURE 1 ============ -->
+<section>
+  <div class="col">
+    <h2>The whole system</h2>
+    <p>Read top to bottom. Market data descends through two adapters into one qtrade; order commands descend from strategies to the venue edge; execution reports climb back into the ExecutionEngine. Everything inside the indigo band is compiled once and never recompiled to go live.</p>
   </div>
 
   <figure>
     <div class="figbox">
-      <svg viewBox="0 0 1560 1520" role="img" aria-label="Multi-exchange architecture. NSE and MCX each have a live transport and a replay transport feeding a single per-exchange decoder; CME has replay only. All three decoders emit a normalized exchange-agnostic event stream, which enters a shared core containing an event scheduler and clock, data engine, book, cache, strategies, execution engine and risk. Order commands leave the core to either an independent simulated exchange in backtest or live gateways in production, and execution reports return to the execution engine. The simulated exchange receives market events directly from the normalized stream, not from the core.">
+      <svg viewBox="0 0 1720 1700" role="img" aria-label="Complete architecture. Deployment configuration feeds the live transports; run configuration feeds the qtrade. An MCX adapter and a Quincy adapter each have a live and replay transport converging on one decoder, normalizer and instrument filter. Both feed a Sequencer, with a Recorder capturing alongside. The qtrade contains scheduler and clock, data engine, book builder, cache, event dispatcher, strategies, cost model, execution engine, validation, control dispatcher and reporting. Order commands leave to either the simulated exchange or the MCX ETI gateway, and both return execution reports to the execution engine.">
         <defs>
           <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-line"/></marker>
           <marker id="a1c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker>
@@ -194,157 +171,231 @@ td:first-child{font-family:'IBM Plex Mono',monospace; font-size:.85rem; white-sp
           <marker id="a1l" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-live"/></marker>
         </defs>
 
-        <text x="60" y="36" class="t-zone">EXCHANGE ADAPTERS &#8212; ONE PER VENUE, DECODER SHARED ACROSS MODES</text>
+        <text x="30" y="30" class="t-zone">CONFIGURATION</text>
+        <text x="330" y="30" class="t-zone">FEED ADAPTERS &#8212; ONE PER PROTOCOL, EACH ON ITS OWN THREAD</text>
 
-        <rect x="60" y="56" width="225" height="50" rx="6" class="bx-live"/>
-        <text x="172" y="76" class="t-ttl-sm mid">Live transport</text>
-        <text x="172" y="94" class="t-sub mid">UDP &middot; A/B &middot; recovery</text>
-        <rect x="295" y="56" width="225" height="50" rx="6" class="bx-bt"/>
-        <text x="408" y="76" class="t-ttl-sm mid">Replay transport</text>
-        <text x="408" y="94" class="t-sub mid">recorded packets</text>
-        <line x1="172" y1="106" x2="172" y2="144" class="ln-live" marker-end="url(#a1l)"/>
-        <line x1="408" y1="106" x2="408" y2="144" class="ln-bt" marker-end="url(#a1b)"/>
-        <rect x="60" y="146" width="460" height="78" rx="6" class="bx-core"/>
-        <text x="290" y="172" class="t-ttl mid">NSE MTBT DECODER</text>
-        <text x="290" y="191" class="t-sub mid">CM + FO &middot; N M X T &middot; G H J K &middot; C &middot; Z</text>
-        <text x="290" y="208" class="t-sub mid">1980 epoch &#8594; Unix &middot; paise &#8594; ticks</text>
+        <!-- config rail -->
+        <rect x="30" y="110" width="210" height="210" rx="8" class="bx-live"/>
+        <text x="135" y="136" class="t-ttl-sm mid">CONFIG &#91;deployment&#93;</text>
+        
+        <text x="135" y="158" class="t-sub mid f-live">NOT hashed</text>
+        <line x1="46" y1="184" x2="224" y2="184" stroke="var(--line)" stroke-width="1"/>
+        <text x="46" y="205" class="t-sub">multicast groups</text>
+        <text x="46" y="225" class="t-sub">ports &middot; interfaces</text>
+        <text x="46" y="245" class="t-sub">A/B service pairs</text>
+        <text x="46" y="265" class="t-sub">credential refs only</text>
+        <text x="46" y="285" class="t-sub">prod|UAT|sim</text>
+        <text x="46" y="308" class="t-sub">restart to change</text>
+        <polyline points="242,180 300,180 300,124 344,124" class="ln-live" marker-end="url(#a1l)"/>
+        <text x="250" y="146" class="t-lbl f-live">to all transports</text>
 
-        <rect x="550" y="56" width="225" height="50" rx="6" class="bx-live"/>
-        <text x="662" y="76" class="t-ttl-sm mid">Live transport</text>
-        <text x="662" y="94" class="t-sub mid">MCX feed</text>
-        <rect x="785" y="56" width="225" height="50" rx="6" class="bx-bt"/>
-        <text x="897" y="76" class="t-ttl-sm mid">Replay transport</text>
-        <text x="897" y="94" class="t-sub mid">recorded packets</text>
-        <line x1="662" y1="106" x2="662" y2="144" class="ln-live" marker-end="url(#a1l)"/>
-        <line x1="897" y1="106" x2="897" y2="144" class="ln-bt" marker-end="url(#a1b)"/>
-        <rect x="550" y="146" width="460" height="78" rx="6" class="bx-core"/>
-        <text x="780" y="172" class="t-ttl mid">MCX DECODER</text>
-        <text x="780" y="191" class="t-sub mid">separate protocol, not an NSE segment</text>
-        <text x="780" y="208" class="t-sub mid">own epoch &middot; own tick scale</text>
+        <rect x="30" y="640" width="210" height="260" rx="8" class="bx-core"/>
+        <text x="135" y="666" class="t-ttl-sm mid">CONFIG &#91;run&#93;</text>
+        <text x="135" y="685" class="t-sub mid f-core">hashed &#8594; run identity</text>
+        <text x="135" y="702" class="t-sub mid f-core">(config, build)</text>
+        <line x1="46" y1="713" x2="224" y2="713" stroke="var(--line)" stroke-width="1"/>
+        <text x="46" y="734" class="t-sub">recordings + hashes</text>
+        <text x="46" y="754" class="t-sub">full strategy set</text>
+        <text x="46" y="774" class="t-sub">params &middot; latency seed</text>
+        <text x="46" y="794" class="t-sub">OTR + validation</text>
+        <text x="46" y="814" class="t-sub">switches</text>
+        <text x="46" y="834" class="t-sub">warmup + bootstrap</text>
+        <text x="46" y="854" class="t-sub">calendar version</text>
+        <text x="46" y="874" class="t-sub">mode: backtest | live</text>
+        <line x1="242" y1="770" x2="314" y2="770" class="ln-core" marker-end="url(#a1c)"/>
 
-        <rect x="1040" y="56" width="460" height="50" rx="6" class="bx-bt"/>
-        <text x="1270" y="76" class="t-ttl-sm mid">Replay transport</text>
-        <text x="1270" y="94" class="t-sub mid">recorded only &#8212; no live feed planned</text>
-        <line x1="1270" y1="106" x2="1270" y2="144" class="ln-bt" marker-end="url(#a1b)"/>
-        <rect x="1040" y="146" width="460" height="78" rx="6" class="bx-core"/>
-        <text x="1270" y="172" class="t-ttl mid">CME DECODER</text>
-        <text x="1270" y="191" class="t-sub mid">may be MBP, not order-by-order</text>
-        <text x="1270" y="208" class="t-sub mid">see Figure 4</text>
+        <!-- MCX adapter -->
+        <rect x="330" y="60" width="650" height="270" rx="10" class="grp"/>
+        <text x="346" y="82" class="t-lbl f-core">MCX ADAPTER &#8212; adapter thread</text>
+        <rect x="348" y="96" width="300" height="52" rx="6" class="bx-live"/>
+        <text x="498" y="118" class="t-ttl-sm mid">Live Transport</text>
+        <text x="498" y="137" class="t-sub mid">multicast &middot; A/B &middot; recovery</text>
+        <rect x="664" y="96" width="300" height="52" rx="6" class="bx-bt"/>
+        <text x="814" y="118" class="t-ttl-sm mid">Replay Transport</text>
+        <text x="814" y="137" class="t-sub mid">recorded messages</text>
+        <line x1="498" y1="148" x2="498" y2="174" class="ln-live" marker-end="url(#a1l)"/>
+        <line x1="814" y1="148" x2="814" y2="174" class="ln-bt" marker-end="url(#a1b)"/>
+        <rect x="348" y="176" width="616" height="54" rx="6" class="bx-core"/>
+        <text x="656" y="199" class="t-ttl mid">MCX T7 EOBI DECODER</text>
+        <text x="656" y="219" class="t-sub mid">13100 &middot; 13101 &middot; 13106 &middot; 13102 &middot; 13104/5 &middot; 13300/1</text>
+        <line x1="656" y1="230" x2="656" y2="246" class="ln-core" marker-end="url(#a1c)"/>
+        <rect x="348" y="248" width="616" height="54" rx="6" class="bx-core"/>
+        <text x="656" y="270" class="t-ttl-sm mid">NORMALIZE &#8594; FILTER</text>
+        <text x="656" y="290" class="t-sub mid">i64 ns &middot; i64 ticks &middot; filter on SecurityID</text>
 
-        <polyline points="290,224 290,254 776,254" class="ln-core"/>
-        <polyline points="1270,224 1270,254 784,254" class="ln-core"/>
-        <line x1="780" y1="224" x2="780" y2="254" class="ln-core"/>
-        <line x1="780" y1="254" x2="780" y2="284" class="ln-core" marker-end="url(#a1c)"/>
+        <!-- Quincy adapter -->
+        <rect x="1040" y="60" width="650" height="270" rx="10" class="grp"/>
+        <text x="1056" y="82" class="t-lbl f-core">QUINCY ADAPTER &#8212; adapter thread &middot; serves CME + DGCX</text>
+        <rect x="1058" y="96" width="300" height="52" rx="6" class="bx-live"/>
+        <text x="1208" y="118" class="t-ttl-sm mid">Live Transport</text>
+        <text x="1208" y="137" class="t-sub mid">QED feed</text>
+        <rect x="1374" y="96" width="300" height="52" rx="6" class="bx-bt"/>
+        <text x="1524" y="118" class="t-ttl-sm mid">Replay Transport</text>
+        <text x="1524" y="137" class="t-sub mid">recorded messages</text>
+        <line x1="1208" y1="148" x2="1208" y2="174" class="ln-live" marker-end="url(#a1l)"/>
+        <line x1="1524" y1="148" x2="1524" y2="174" class="ln-bt" marker-end="url(#a1b)"/>
+        <rect x="1058" y="176" width="616" height="54" rx="6" class="bx-core"/>
+        <text x="1366" y="199" class="t-ttl mid">QUINCY QED DECODER</text>
+        <text x="1366" y="219" class="t-sub mid">vendor-normalised &middot; MBP &middot; wire format TBC</text>
+        <line x1="1366" y1="230" x2="1366" y2="246" class="ln-core" marker-end="url(#a1c)"/>
+        <rect x="1058" y="248" width="616" height="54" rx="6" class="bx-core"/>
+        <text x="1366" y="270" class="t-ttl-sm mid">NORMALIZE &#8594; FILTER</text>
+        <text x="1366" y="290" class="t-sub mid">CME 5 deep &middot; DGCX BBO</text>
 
-        <rect x="470" y="286" width="620" height="58" rx="6" class="bx-core"/>
-        <text x="780" y="310" class="t-ttl mid">NORMALIZED EVENT STREAM</text>
-        <text x="780" y="330" class="t-sub mid">exchange-agnostic internal types &middot; interned InstrumentId</text>
-        <line x1="780" y1="344" x2="780" y2="378" class="ln-core" marker-end="url(#a1c)"/>
+        <!-- sequencer + recorder -->
+        <polyline points="656,304 656,346 830,346" class="ln-core"/>
+        <polyline points="1366,304 1366,346 850,346" class="ln-core"/>
+        <line x1="840" y1="346" x2="840" y2="364" class="ln-core" marker-end="url(#a1c)"/>
+        <rect x="620" y="366" width="440" height="66" rx="6" class="bx"/>
+        <text x="840" y="391" class="t-ttl mid">SEQUENCER</text>
+        <text x="840" y="410" class="t-sub mid">merge on (capture_ts, source_id, seq)</text>
+        <text x="840" y="426" class="t-sub mid">deterministic by data, not thread timing</text>
 
-        <rect x="80" y="380" width="1400" height="870" rx="14" class="band"/>
-        <rect x="80" y="380" width="620" height="34" rx="6" class="tab"/>
-        <text x="100" y="402" class="t-tab">EXCHANGE-AGNOSTIC CORE &middot; ONE BINARY &middot; BOTH MODES</text>
+        <rect x="1140" y="366" width="330" height="66" rx="6" class="bx-live"/>
+        <text x="1305" y="391" class="t-ttl-sm mid">RECORDER &#8212; live only</text>
+        <text x="1305" y="410" class="t-sub mid">per-stream raw + post-merge journal</text>
+        <text x="1305" y="426" class="t-sub mid">bounded ring &middot; drop and alarm</text>
+        <line x1="1062" y1="399" x2="1136" y2="399" class="ln-live dash" marker-end="url(#a1l)"/>
 
-        <rect x="470" y="424" width="620" height="90" rx="6" class="bx-core"/>
-        <text x="780" y="452" class="t-ttl mid">EVENT SCHEDULER + CLOCK</text>
-        <text x="780" y="472" class="t-sub mid">priority queue ordered by (ts, class, seq)</text>
-        <text x="780" y="490" class="t-sub mid">market data &middot; timers &middot; latency &middot; session phases</text>
-        <text x="780" y="507" class="t-sub mid f-core">see Figure 3</text>
-        <line x1="780" y1="514" x2="780" y2="546" class="ln-core" marker-end="url(#a1c)"/>
+        <line x1="840" y1="432" x2="840" y2="466" class="ln-core" marker-end="url(#a1c)"/>
 
-        <rect x="470" y="548" width="620" height="60" rx="6" class="bx-core"/>
-        <text x="780" y="573" class="t-ttl mid">DATA ENGINE</text>
-        <text x="780" y="592" class="t-sub mid">subscriptions &middot; session phase &middot; book state</text>
+        <!-- CORE -->
+        <rect x="320" y="470" width="1370" height="940" rx="14" class="band"/>
+        <rect x="320" y="470" width="620" height="34" rx="6" class="tab"/>
+        <text x="340" y="492" class="t-tab">QTRADE &#8212; ONE THREAD &middot; ONE BINARY &middot; BOTH MODES</text>
 
-        <polyline points="780,608 780,632 370,632 370,654" class="ln-core" marker-end="url(#a1c)"/>
-        <polyline points="780,608 780,632 1230,632 1230,654" class="ln-core" marker-end="url(#a1c)"/>
+        <rect x="780" y="530" width="450" height="86" rx="6" class="bx-core"/>
+        <text x="1005" y="556" class="t-ttl mid">SCHEDULER + CLOCK</text>
+        <text x="1005" y="576" class="t-sub mid">priority queue &middot; (ts, class, seq)</text>
+        <text x="1005" y="593" class="t-sub mid">the only thing that advances time</text>
+        <text x="1005" y="609" class="t-sub mid f-core">monotonic order &middot; wall clock for meaning</text>
+        <line x1="1005" y1="616" x2="1005" y2="634" class="ln-core" marker-end="url(#a1c)"/>
 
-        <rect x="170" y="656" width="400" height="86" rx="6" class="bx-core"/>
-        <text x="370" y="682" class="t-ttl mid">BOOK BUILDER</text>
-        <text x="370" y="701" class="t-sub mid">pure function of the event stream</text>
-        <text x="370" y="718" class="t-sub mid">crossed-tolerant &middot; MBO or MBP</text>
-        <text x="370" y="735" class="t-sub mid f-bt">instance count = wiring decision</text>
+        <rect x="780" y="636" width="450" height="60" rx="6" class="bx-core"/>
+        <text x="1005" y="660" class="t-ttl mid">DATA ENGINE</text>
+        <text x="1005" y="679" class="t-sub mid">subscriptions &middot; session phase &middot; book state</text>
 
-        <rect x="1030" y="656" width="400" height="86" rx="6" class="bx-core"/>
-        <text x="1230" y="682" class="t-ttl mid">EVENT DISPATCHER</text>
-        <text x="1230" y="701" class="t-sub mid">per-instrument subscriber lists</text>
-        <text x="1230" y="718" class="t-sub mid">static dispatch &middot; no allocation</text>
+        <polyline points="1005,696 1005,716 550,716 550,736" class="ln-core" marker-end="url(#a1c)"/>
+        <polyline points="1005,696 1005,716 1470,716 1470,736" class="ln-core" marker-end="url(#a1c)"/>
 
-        <line x1="370" y1="742" x2="370" y2="772" class="ln-core" marker-end="url(#a1c)"/>
-        <rect x="170" y="774" width="400" height="170" rx="6" class="bx-core"/>
-        <text x="370" y="800" class="t-ttl mid">CACHE</text>
-        <line x1="190" y1="814" x2="550" y2="814" stroke="var(--line)" stroke-width="1"/>
-        <text x="190" y="836" class="t-sub">books per subscribed instrument</text>
-        <text x="190" y="858" class="t-sub">UNINIT / RECOVERING / OK / STALE</text>
-        <text x="190" y="880" class="t-sub">own orders &middot; positions &middot; P&amp;L</text>
-        <text x="190" y="902" class="t-sub">last trade &middot; session phase</text>
-        <text x="190" y="924" class="t-sub">reference data per trading day</text>
+        <rect x="360" y="738" width="380" height="68" rx="6" class="bx-core"/>
+        <text x="550" y="762" class="t-ttl mid">BOOK BUILDER</text>
+        <text x="550" y="781" class="t-sub mid">one book per filtered instrument</text>
+        <text x="550" y="798" class="t-sub mid">MboBook (MCX) | MbpBook (CME, DGCX)</text>
 
-        <rect x="1030" y="774" width="400" height="120" rx="6" class="bx-core"/>
-        <text x="1230" y="802" class="t-ttl mid">STRATEGY &times; N</text>
-        <text x="1230" y="822" class="t-sub mid">identical code in both modes</text>
-        <text x="1230" y="840" class="t-sub mid">no wall clock &middot; no rng &middot; no I/O</text>
-        <text x="1230" y="858" class="t-sub mid">schedules its own timers</text>
-        <text x="1230" y="878" class="t-sub mid">private derived views</text>
-        <line x1="1230" y1="742" x2="1230" y2="772" class="ln-core" marker-end="url(#a1c)"/>
-        <text x="1244" y="762" class="t-lbl">on_book &middot; on_trade &middot; on_fill</text>
-        <line x1="572" y1="830" x2="1028" y2="830" class="ln-core dash" marker-end="url(#a1c)"/>
-        <text x="800" y="822" class="t-lbl mid">read-only views</text>
+        <rect x="1280" y="738" width="380" height="68" rx="6" class="bx-core"/>
+        <text x="1470" y="762" class="t-ttl mid">EVENT DISPATCHER</text>
+        <text x="1470" y="781" class="t-sub mid">keyed (instrument, depth)</text>
+        <text x="1470" y="798" class="t-sub mid">static dispatch &middot; no allocation</text>
 
-        <polyline points="1230,894 1230,970 790,970 790,1000" class="ln-core" marker-end="url(#a1c)"/>
-        <text x="1000" y="962" class="t-lbl mid">submit &middot; cancel &middot; modify</text>
+        <line x1="550" y1="806" x2="550" y2="834" class="ln-core" marker-end="url(#a1c)"/>
+        <rect x="360" y="836" width="380" height="196" rx="6" class="bx-core"/>
+        <text x="550" y="860" class="t-ttl mid">CACHE</text>
+        <line x1="378" y1="870" x2="722" y2="870" stroke="var(--line)" stroke-width="1"/>
+        <text x="378" y="892" class="t-sub">books &middot; UNINIT/RECOVERING/OK/STALE</text>
+        <text x="378" y="914" class="t-sub">session state per venue</text>
+        <text x="378" y="936" class="t-sub">sub-account &middot; firm aggregate</text>
+        <text x="378" y="958" class="t-sub">own orders (the OMS state)</text>
+        <text x="378" y="980" class="t-sub">reference data + instrument kinds</text>
+        <text x="378" y="1000" class="t-sub">warmup + reconciliation gates</text>
+        <text x="378" y="1018" class="t-sub f-core">read-only to strategies</text>
 
-        <rect x="580" y="1002" width="420" height="62" rx="6" class="bx-core"/>
-        <text x="790" y="1028" class="t-ttl mid">EXECUTION ENGINE</text>
-        <text x="790" y="1047" class="t-sub mid">order state machine &middot; reconciliation</text>
+        <rect x="1280" y="836" width="380" height="120" rx="6" class="bx-core"/>
+        <text x="1470" y="860" class="t-ttl mid">STRATEGY &times; N</text>
+        <text x="1470" y="880" class="t-sub mid">fair value &middot; skew &middot; roll &middot; filter</text>
+        <text x="1470" y="898" class="t-sub mid">declares signal dependencies</text>
+        <text x="1470" y="916" class="t-sub mid">publishes named time series</text>
+        <text x="1470" y="934" class="t-sub mid">no wall clock &middot; no rng &middot; no I/O</text>
+        <text x="1470" y="950" class="t-sub mid f-core">inline on the qtrade thread</text>
+        <line x1="1470" y1="806" x2="1470" y2="834" class="ln-core" marker-end="url(#a1c)"/>
+        <line x1="742" y1="890" x2="1276" y2="890" class="ln-core dash" marker-end="url(#a1c)"/>
+        <text x="1009" y="882" class="t-lbl mid">read-only views</text>
 
-        <polyline points="620,1000 620,960 400,960 400,946" class="ln-core dash" marker-end="url(#a1c)"/>
-        <text x="410" y="952" class="t-lbl">positions</text>
+        <rect x="1280" y="972" width="380" height="54" rx="6" class="bx-core"/>
+        <text x="1470" y="994" class="t-ttl-sm mid">COST MODEL</text>
+        <text x="1470" y="1012" class="t-sub mid">round-trip cost, queryable pre-quote</text>
+        <line x1="1470" y1="956" x2="1470" y2="970" class="ln-core dash" marker-end="url(#a1c)"/>
 
-        <line x1="790" y1="1064" x2="790" y2="1094" class="ln-core" marker-end="url(#a1c)"/>
-        <rect x="580" y="1096" width="420" height="60" rx="6" class="bx-core"/>
-        <text x="790" y="1121" class="t-ttl mid">RISK / PORTFOLIO</text>
-        <text x="790" y="1140" class="t-sub mid">limits &middot; exposure &middot; kill switch</text>
+        <polyline points="1278,920 1246,920 1246,1040 1005,1040 1005,1058" class="ln-core" marker-end="url(#a1c)"/>
+        <text x="1120" y="1032" class="t-lbl mid">submit &middot; cancel &middot; modify</text>
 
-        <line x1="790" y1="1156" x2="790" y2="1276" class="ln-core"/>
+        <rect x="790" y="1060" width="430" height="60" rx="6" class="bx-core"/>
+        <text x="1005" y="1084" class="t-ttl mid">EXECUTION ENGINE</text>
+        <text x="1005" y="1103" class="t-sub mid">order state machine &middot; reconciliation</text>
 
-        <text x="170" y="1300" class="t-zone f-bt">BACKTEST VENUE</text>
-        <text x="950" y="1300" class="t-zone f-live">LIVE VENUES</text>
+        <polyline points="788,1080 620,1080 620,1034" class="ln-core dash" marker-end="url(#a1c)"/>
+        <text x="628" y="1098" class="t-lbl">positions</text>
 
-        <polyline points="790,1276 425,1276 425,1314" class="ln-core" marker-end="url(#a1c)"/>
-        <polyline points="790,1276 1190,1276 1190,1314" class="ln-core" marker-end="url(#a1c)"/>
-        <text x="802" y="1268" class="t-lbl f-core">order commands</text>
+        <line x1="1005" y1="1120" x2="1005" y2="1138" class="ln-core" marker-end="url(#a1c)"/>
+        <rect x="790" y="1140" width="430" height="112" rx="6" class="bx-core"/>
+        <text x="1005" y="1164" class="t-ttl mid">THREE GATES</text>
+        <text x="1005" y="1184" class="t-sub mid">1. VALIDATION &#8212; tick size &middot; freeze qty</text>
+        <text x="1005" y="1202" class="t-sub mid">2. RMS &#8212; trait; phase 1 passes all</text>
+        <text x="1005" y="1220" class="t-sub mid">3. OTR governor &#8212; budget</text>
+        <text x="1005" y="1240" class="t-sub mid f-core">local reject &#8594; synchronous return</text>
+        <rect x="790" y="1266" width="430" height="46" rx="6" class="bx-core"/>
+        <text x="1005" y="1288" class="t-ttl-sm mid">WATCHDOG</text>
+        <text x="1005" y="1305" class="t-sub mid">declared-dependency staleness &#8594; cancel</text>
 
-        <rect x="170" y="1318" width="510" height="150" rx="6" class="bx-bt"/>
-        <text x="425" y="1346" class="t-ttl mid">SIMULATED EXCHANGE</text>
-        <line x1="190" y1="1360" x2="660" y2="1360" stroke="var(--bt)" stroke-width="1" opacity=".35"/>
-        <text x="190" y="1382" class="t-sub">its own books &#8212; no read path into the core</text>
-        <text x="190" y="1404" class="t-sub">traded instruments only, not all subscribed</text>
-        <text x="190" y="1426" class="t-sub">latency model &middot; queue position &middot; fills</text>
-        <text x="190" y="1448" class="t-sub">priority rule on modify</text>
+        <!-- control plane -->
+        <rect x="360" y="1060" width="380" height="66" rx="6" class="bx-core"/>
+        <text x="550" y="1084" class="t-ttl mid">CONTROL DISPATCHER</text>
+        <text x="550" y="1103" class="t-sub mid">typed handler lists &middot; low rate</text>
+        <text x="550" y="1119" class="t-sub mid">observers added by wiring</text>
+        <line x1="788" y1="1093" x2="744" y2="1093" class="ln-core" marker-end="url(#a1c)"/>
 
-        <rect x="950" y="1318" width="480" height="70" rx="6" class="bx-live"/>
-        <text x="1190" y="1345" class="t-ttl mid">EXCHANGE GATEWAYS</text>
-        <text x="1190" y="1364" class="t-sub mid">NSE NNF / CTCL &middot; MCX order entry</text>
-        <text x="1190" y="1380" class="t-sub mid">one per venue, same interface</text>
+        <rect x="360" y="1156" width="380" height="146" rx="6" class="bx-bt"/>
+        <text x="550" y="1180" class="t-ttl mid">REPORTING &middot; ALERTS &middot; JOURNAL</text>
+        <line x1="378" y1="1190" x2="722" y2="1190" stroke="var(--bt)" stroke-width="1" opacity=".35"/>
+        <text x="378" y="1212" class="t-sub">tier 1 &#8212; P&amp;L, inventory, markout, OTR</text>
+        <text x="378" y="1234" class="t-sub">tier 2 &#8212; every order, queue pos per fill</text>
+        <text x="378" y="1256" class="t-sub">tier 3 &#8212; strategy time series</text>
+        <text x="378" y="1278" class="t-sub">alerts &middot; journal (live)</text>
+        <text x="378" y="1296" class="t-sub f-bt">every output embeds the run spec + hashes</text>
+        <line x1="550" y1="1126" x2="550" y2="1154" class="ln-core" marker-end="url(#a1c)"/>
 
-        <rect x="950" y="1414" width="480" height="56" rx="6" class="bx-ext"/>
-        <text x="1190" y="1438" class="t-ttl mid">REAL MATCHING ENGINES</text>
-        <text x="1190" y="1456" class="t-sub mid">external</text>
-        <line x1="1120" y1="1388" x2="1120" y2="1412" class="ln-live" marker-end="url(#a1l)"/>
-        <line x1="1260" y1="1412" x2="1260" y2="1388" class="ln-live" marker-end="url(#a1l)"/>
+        <line x1="1005" y1="1312" x2="1005" y2="1424" class="ln-core"/>
 
-        <polyline points="468,315 20,315 20,1438 168,1438" class="ln-bt" marker-end="url(#a1b)"/>
-        <text x="34" y="1462" class="t-lbl f-bt">market events &#8212; direct from the stream, never via the core</text>
+        <!-- venue edge -->
+        <text x="360" y="1444" class="t-zone f-bt">BACKTEST VENUE</text>
+        <text x="1150" y="1444" class="t-zone f-live">LIVE VENUE</text>
+        <polyline points="1005,1424 620,1424 620,1452" class="ln-core" marker-end="url(#a1c)"/>
+        <polyline points="1005,1424 1385,1424 1385,1452" class="ln-core" marker-end="url(#a1c)"/>
+        <text x="1017" y="1416" class="t-lbl f-core">order commands</text>
 
-        <polyline points="168,1358 60,1358 60,1025 578,1025" class="ln-bt" marker-end="url(#a1b)"/>
-        <text x="72" y="1016" class="t-lbl f-bt">simulated reports</text>
+        <rect x="340" y="1456" width="560" height="168" rx="6" class="bx-bt"/>
+        <text x="620" y="1482" class="t-ttl mid">SIMULATED EXCHANGE</text>
+        <line x1="358" y1="1492" x2="882" y2="1492" stroke="var(--bt)" stroke-width="1" opacity=".35"/>
+        <text x="358" y="1514" class="t-sub">its own books &#8212; no path into the qtrade</text>
+        <text x="358" y="1536" class="t-sub">latency &middot; queue position &middot; price-time</text>
+        <text x="358" y="1558" class="t-sub">BOC reject &middot; MMP &middot; OTR &middot; STP</text>
+        <text x="358" y="1580" class="t-sub">Lean cancel on session loss &amp; EOD</text>
+        <text x="358" y="1602" class="t-sub">Market-to-Limit residual rests</text>
+        <text x="358" y="1618" class="t-sub f-bt">same filtered instrument set</text>
 
-        <polyline points="1432,1353 1520,1353 1520,1025 1002,1025" class="ln-live" marker-end="url(#a1l)"/>
-        <text x="1508" y="1016" class="t-lbl end f-live">execution reports</text>
+        <rect x="1150" y="1456" width="470" height="62" rx="6" class="bx-live"/>
+        <text x="1385" y="1481" class="t-ttl mid">MCX ETI GATEWAY</text>
+        <text x="1385" y="1500" class="t-sub mid">binary, FIX 5.0 SP2 semantics</text>
+        <rect x="1150" y="1556" width="470" height="56" rx="6" class="bx-ext"/>
+        <text x="1385" y="1580" class="t-ttl mid">MCX MATCHING ENGINE</text>
+        <text x="1385" y="1598" class="t-sub mid">external</text>
+        <line x1="1300" y1="1518" x2="1300" y2="1554" class="ln-live" marker-end="url(#a1l)"/>
+        <line x1="1470" y1="1554" x2="1470" y2="1518" class="ln-live" marker-end="url(#a1l)"/>
+
+        <!-- returns -->
+        <polyline points="902,1540 1702,1540 1702,1082 1224,1082" class="ln-bt" marker-end="url(#a1b)"/>
+        <text x="1694" y="1072" class="t-lbl end f-bt">simulated reports</text>
+        <polyline points="1622,1487 1668,1487 1668,1104 1224,1104" class="ln-live" marker-end="url(#a1l)"/>
+        <text x="1240" y="1124" class="t-lbl f-live">execution reports</text>
+
+        <polyline points="618,399 292,399 292,1520 336,1520" class="ln-bt" marker-end="url(#a1b)"/>
+        <text x="300" y="1552" class="t-lbl f-bt">normalized events &#8212; direct to the simulator,</text>
+        <text x="300" y="1570" class="t-lbl f-bt">never via the qtrade</text>
+
+        <text x="860" y="1668" class="t-lbl mid">adapter threads feed the qtrade thread through bounded queues &#8212; ordering fixed by data, not by scheduling</text>
       </svg>
     </div>
-    <figcaption><b>Figure 1.</b> Decoders sit at the exchange edge, each shared between its live and replay transports. Below the normalized event stream nothing is exchange-specific. Two arrows are load-bearing: the amber line down the far left feeds the simulated exchange <em>directly from the stream</em> rather than through the core, and the two report arrows converge on the same execution engine input so the core cannot tell which venue answered.</figcaption>
+    <figcaption><b>Figure 1.</b> Two adapters converge on one Sequencer; two venue adapters hang off one ExecutionEngine. Three arrows carry the design: the <b>dashed line from Cache to Strategy</b> is a read, not an event; the <b>two report arrows</b> converge on the same input so the qtrade cannot tell which venue answered; and the <b>amber line down the far left</b> feeds the Simulated Exchange directly from the normalized stream, never through the qtrade.</figcaption>
   </figure>
 
   <div class="legend">
@@ -357,341 +408,277 @@ td:first-child{font-family:'IBM Plex Mono',monospace; font-size:.85rem; white-sp
   </div>
 </section>
 
+<!-- ============ FIGURE 2 ============ -->
 <section>
   <div class="col">
-    <h2>The adapter that keeps modes honest</h2>
-    <p>Zoom into one exchange. The transports differ &mdash; a socket versus a file &mdash; but they converge immediately, and everything downstream of that convergence is one piece of code. That single decoder is where backtest/live parity is actually enforced, because a decoder bug reproduces identically on both paths instead of hiding on one.</p>
+    <h2>An adapter is a protocol, not an exchange</h2>
+    <p>The distinction matters because Quincy delivers CME and DGCX over one normalised feed. Draw one adapter per exchange and you have already got the model wrong.</p>
   </div>
 
   <figure>
     <div class="figbox">
-      <svg viewBox="0 0 1100 460" role="img" aria-label="One exchange adapter in detail: a live transport doing UDP multicast with A B arbitration and recovery, and a replay transport reading recorded packets, both feed one shared decoder, which feeds a normalizer that emits internal event types into the exchange-agnostic core.">
-        <defs>
-          <marker id="a2c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker>
-          <marker id="a2b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-bt"/></marker>
-          <marker id="a2l" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-live"/></marker>
-        </defs>
+      <svg viewBox="0 0 1120 420" role="img" aria-label="The MCX adapter serves one venue; the Quincy adapter serves two venues, CME and DGCX. Both emit into the same internal event stream, where the venue is carried in the instrument identity rather than implied by the adapter.">
+        <defs><marker id="a2c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker></defs>
 
-        <text x="60" y="30" class="t-zone">ONE EXCHANGE ADAPTER &#8212; NSE SHOWN, THE PATTERN REPEATS PER VENUE</text>
+        <text x="60" y="30" class="t-zone">ADAPTERS</text>
+        <text x="700" y="30" class="t-zone">VENUES THEY CARRY</text>
 
-        <rect x="60" y="52" width="440" height="76" rx="6" class="bx-live"/>
-        <text x="280" y="78" class="t-ttl mid">LIVE TRANSPORT</text>
-        <text x="280" y="97" class="t-sub mid">UDP multicast &middot; A/B arbitration</text>
-        <text x="280" y="114" class="t-sub mid">gap detect &middot; TCP recovery &middot; snapshot</text>
+        <rect x="60" y="52" width="380" height="88" rx="8" class="bx-core"/>
+        <text x="250" y="82" class="t-ttl mid">MCX ADAPTER</text>
+        <text x="250" y="102" class="t-sub mid">T7 EOBI &middot; binary multicast</text>
+        <text x="250" y="122" class="t-sub mid">MBO &#8212; order by order</text>
+        <line x1="442" y1="96" x2="696" y2="96" class="ln-core" marker-end="url(#a2c)"/>
+        <rect x="700" y="70" width="360" height="52" rx="6" class="bx"/>
+        <text x="880" y="93" class="t-ttl-sm mid">MCX</text>
+        <text x="880" y="111" class="t-sub mid">Crude Oil &middot; Natural Gas &#8212; we quote here</text>
 
-        <rect x="560" y="52" width="440" height="76" rx="6" class="bx-bt"/>
-        <text x="780" y="78" class="t-ttl mid">REPLAY TRANSPORT</text>
-        <text x="780" y="97" class="t-sub mid">recorded raw packets</text>
-        <text x="780" y="114" class="t-sub mid">capture order preserved</text>
+        <rect x="60" y="192" width="380" height="88" rx="8" class="bx-core"/>
+        <text x="250" y="222" class="t-ttl mid">QUINCY ADAPTER</text>
+        <text x="250" y="242" class="t-sub mid">QED &middot; vendor-normalised</text>
+        <text x="250" y="262" class="t-sub mid">MBP &#8212; aggregated depth</text>
+        <polyline points="442,222 570,222 570,196 696,196" class="ln-core" marker-end="url(#a2c)"/>
+        <polyline points="442,250 570,250 570,286 696,286" class="ln-core" marker-end="url(#a2c)"/>
+        <rect x="700" y="170" width="360" height="52" rx="6" class="bx"/>
+        <text x="880" y="193" class="t-ttl-sm mid">CME</text>
+        <text x="880" y="211" class="t-sub mid">5-level depth &#8212; price signal</text>
+        <rect x="700" y="260" width="360" height="52" rx="6" class="bx"/>
+        <text x="880" y="283" class="t-ttl-sm mid">DGCX / GME</text>
+        <text x="880" y="301" class="t-sub mid">BBO only &#8212; USD/INR signal</text>
 
-        <line x1="280" y1="128" x2="280" y2="174" class="ln-live" marker-end="url(#a2l)"/>
-        <line x1="780" y1="128" x2="780" y2="174" class="ln-bt" marker-end="url(#a2b)"/>
-
-        <rect x="60" y="176" width="940" height="84" rx="8" class="band"/>
-        <text x="530" y="204" class="t-ttl mid f-core">NSE MTBT DECODER &#8212; ONE IMPLEMENTATION, BOTH PATHS</text>
-        <text x="530" y="226" class="t-sub mid">packed little-endian structs &middot; msg_len self-delimiting &middot; unknown types skipped safely</text>
-        <text x="530" y="246" class="t-sub mid f-core">a bug here reproduces in backtest instead of hiding until production</text>
-
-        <line x1="530" y1="260" x2="530" y2="296" class="ln-core" marker-end="url(#a2c)"/>
-
-        <rect x="230" y="298" width="600" height="86" rx="6" class="bx-core"/>
-        <text x="530" y="324" class="t-ttl mid">NORMALIZER &#8594; INTERNAL EVENTS</text>
-        <text x="530" y="344" class="t-sub mid">i64 ns Unix &middot; i64 price ticks &middot; u64 order id</text>
-        <text x="530" y="362" class="t-sub mid">native token &#8594; interned InstrumentId</text>
-        <text x="530" y="378" class="t-sub mid">wire DOUBLE order id converted once, never compared as float</text>
-
-        <line x1="530" y1="384" x2="530" y2="416" class="ln-core" marker-end="url(#a2c)"/>
-        <text x="530" y="440" class="t-lbl mid f-core">into the exchange-agnostic core &#8212; nothing NSE-shaped survives this boundary</text>
+        <text x="560" y="368" class="t-lbl mid">one adapter may serve many venues &middot; one venue may later be served by several adapters</text>
+        <text x="560" y="392" class="t-lbl mid f-core">the venue lives in the InstrumentId, never implied by which adapter delivered the event</text>
       </svg>
     </div>
-    <figcaption><b>Figure 2.</b> The convergence point is the contract. Above it, two transports; below it, one code path. Recording at the transport layer lets you replay the exact bytes production saw; recording below the normalizer gives you a faster, exchange-agnostic replay that skips decoding entirely. Both are worth having.</figcaption>
+    <figcaption><b>Figure 2.</b> Adapters are defined by provider and protocol. Because the venue travels in the instrument identity rather than being inferred from the delivery path, adding a second source for an existing venue &mdash; a vendor fallback for MCX, say &mdash; requires no change to anything downstream.</figcaption>
   </figure>
 </section>
 
+<!-- ============ FIGURE 3 ============ -->
 <section>
   <div class="col">
     <h2>Time is a scheduler, not a counter</h2>
-    <p>A clock advanced only by market data cannot detect the <em>absence</em> of market data &mdash; and that absence is exactly what a staleness timeout or a missed heartbeat is. If the feed goes silent for five seconds, a data-driven clock jumps five seconds instantly and never fires the timer that should have marked the book stale.</p>
-    <p>The correct model is a discrete-event scheduler holding a priority queue. Market data is one source among several. Pop the earliest event, set the clock to its timestamp, dispatch it; the handler may enqueue more events. Live uses the same interface with real timers.</p>
+    <p>A clock advanced only by market data cannot detect the <em>absence</em> of market data &mdash; and that absence is exactly what a staleness timeout or a missed heartbeat is. Market data is one event source among eight.</p>
   </div>
 
   <figure>
     <div class="figbox">
-      <svg viewBox="0 0 1240 590" role="img" aria-label="Event scheduler: six event sources - market data, strategy timers, order arrival latency, execution report delivery, session phase transitions, and staleness or heartbeat timeouts - all feed a priority queue ordered by timestamp, class and sequence. The loop pops the earliest event, sets the clock to its timestamp, dispatches it to a handler, and the handler may enqueue further events back into the queue.">
+      <svg viewBox="0 0 1240 600" role="img" aria-label="Eight event sources feed one priority queue ordered by timestamp, class and sequence. The loop pops the earliest event, sets the clock to its timestamp, dispatches it, and handlers may enqueue further events.">
         <defs>
           <marker id="a3c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker>
-          <marker id="a3b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-bt"/></marker>
         </defs>
+        <text x="40" y="30" class="t-zone">EVENT SOURCES</text>
+        <text x="440" y="30" class="t-zone f-core">SINGLE ORDERED QUEUE</text>
+        <text x="800" y="30" class="t-zone">THE LOOP</text>
 
-        <text x="40" y="34" class="t-zone">EVENT SOURCES</text>
-        <text x="440" y="34" class="t-zone f-core">SINGLE ORDERED QUEUE</text>
-        <text x="800" y="34" class="t-zone">THE LOOP</text>
+        <rect x="40" y="48" width="320" height="46" rx="6" class="bx"/>
+        <text x="56" y="68" class="t-ttl-sm">Market data</text><text x="56" y="86" class="t-sub">from the Sequencer</text>
+        <rect x="40" y="102" width="320" height="46" rx="6" class="bx"/>
+        <text x="56" y="122" class="t-ttl-sm">Strategy timers &amp; alarms</text><text x="56" y="140" class="t-sub">set_timer &middot; set_alarm</text>
+        <rect x="40" y="156" width="320" height="46" rx="6" class="bx-bt"/>
+        <text x="56" y="176" class="t-ttl-sm">Order arrival</text><text x="56" y="194" class="t-sub">submitted T, arrives T + latency</text>
+        <rect x="40" y="210" width="320" height="46" rx="6" class="bx-bt"/>
+        <text x="56" y="230" class="t-ttl-sm">Report delivery</text><text x="56" y="248" class="t-sub">filled T, learned T + latency</text>
+        <rect x="40" y="264" width="320" height="46" rx="6" class="bx"/>
+        <text x="56" y="284" class="t-ttl-sm">Session transitions</text><text x="56" y="302" class="t-sub">continuous &middot; auction &middot; close</text>
+        <rect x="40" y="318" width="320" height="46" rx="6" class="bx"/>
+        <text x="56" y="338" class="t-ttl-sm">Staleness &amp; heartbeat</text><text x="56" y="356" class="t-sub">fires when nothing arrives</text>
+        <rect x="40" y="372" width="320" height="46" rx="6" class="bx"/>
+        <text x="56" y="392" class="t-ttl-sm">Watchdog expiry</text><text x="56" y="410" class="t-sub">declared dependency stale</text>
+        <rect x="40" y="426" width="320" height="46" rx="6" class="bx"/>
+        <text x="56" y="446" class="t-ttl-sm">Offload completion</text><text x="56" y="464" class="t-sub">expensive work returning</text>
 
-        <rect x="40" y="56" width="320" height="58" rx="6" class="bx"/>
-        <text x="56" y="80" class="t-ttl-sm">Market data</text>
-        <text x="56" y="100" class="t-sub">replay iterator or live socket</text>
+        <line x1="360" y1="71" x2="436" y2="180" class="ln-core" marker-end="url(#a3c)"/>
+        <line x1="360" y1="125" x2="436" y2="200" class="ln-core" marker-end="url(#a3c)"/>
+        <line x1="360" y1="179" x2="436" y2="220" class="ln-core" marker-end="url(#a3c)"/>
+        <line x1="360" y1="233" x2="436" y2="240" class="ln-core" marker-end="url(#a3c)"/>
+        <line x1="360" y1="287" x2="436" y2="262" class="ln-core" marker-end="url(#a3c)"/>
+        <line x1="360" y1="341" x2="436" y2="284" class="ln-core" marker-end="url(#a3c)"/>
+        <line x1="360" y1="395" x2="436" y2="306" class="ln-core" marker-end="url(#a3c)"/>
+        <line x1="360" y1="449" x2="436" y2="328" class="ln-core" marker-end="url(#a3c)"/>
 
-        <rect x="40" y="126" width="320" height="58" rx="6" class="bx"/>
-        <text x="56" y="150" class="t-ttl-sm">Strategy timers &amp; alarms</text>
-        <text x="56" y="170" class="t-sub">set_timer &middot; set_alarm</text>
-
-        <rect x="40" y="196" width="320" height="58" rx="6" class="bx-bt"/>
-        <text x="56" y="220" class="t-ttl-sm">Order arrival</text>
-        <text x="56" y="240" class="t-sub">submitted at T, arrives T + latency</text>
-
-        <rect x="40" y="266" width="320" height="58" rx="6" class="bx-bt"/>
-        <text x="56" y="290" class="t-ttl-sm">Report delivery</text>
-        <text x="56" y="310" class="t-sub">filled at T, you learn at T + latency</text>
-
-        <rect x="40" y="336" width="320" height="58" rx="6" class="bx"/>
-        <text x="56" y="360" class="t-ttl-sm">Session transitions</text>
-        <text x="56" y="380" class="t-sub">pre-open &middot; open &middot; CAS &middot; close</text>
-
-        <rect x="40" y="406" width="320" height="58" rx="6" class="bx"/>
-        <text x="56" y="430" class="t-ttl-sm">Staleness &amp; heartbeat</text>
-        <text x="56" y="450" class="t-sub">fires when nothing arrives</text>
-
-        <line x1="360" y1="85" x2="436" y2="180" class="ln-core" marker-end="url(#a3c)"/>
-        <line x1="360" y1="155" x2="436" y2="200" class="ln-core" marker-end="url(#a3c)"/>
-        <line x1="360" y1="225" x2="436" y2="225" class="ln-core" marker-end="url(#a3c)"/>
-        <line x1="360" y1="295" x2="436" y2="255" class="ln-core" marker-end="url(#a3c)"/>
-        <line x1="360" y1="365" x2="436" y2="280" class="ln-core" marker-end="url(#a3c)"/>
-        <line x1="360" y1="435" x2="436" y2="305" class="ln-core" marker-end="url(#a3c)"/>
-
-        <rect x="440" y="56" width="280" height="408" rx="8" class="band"/>
-        <text x="580" y="86" class="t-ttl mid f-core">EVENT QUEUE</text>
-        <text x="580" y="108" class="t-sub mid">ordered by</text>
-        <text x="580" y="126" class="t-sub mid">(timestamp, class, seq)</text>
-        <line x1="460" y1="142" x2="700" y2="142" stroke="var(--core)" stroke-width="1" opacity=".4"/>
-
-        <rect x="462" y="158" width="236" height="42" rx="4" class="bx"/>
-        <text x="476" y="176" class="t-sub">09:15:00.000000100</text>
-        <text x="476" y="193" class="t-sub">market &middot; OrderAdd</text>
-
-        <rect x="462" y="210" width="236" height="42" rx="4" class="bx-bt"/>
-        <text x="476" y="228" class="t-sub">09:15:00.000000100</text>
-        <text x="476" y="245" class="t-sub">timer &#8212; same ns, seq breaks tie</text>
-
-        <rect x="462" y="262" width="236" height="42" rx="4" class="bx-bt"/>
-        <text x="476" y="280" class="t-sub">09:15:00.000250000</text>
-        <text x="476" y="297" class="t-sub">your order reaches venue</text>
-
-        <rect x="462" y="314" width="236" height="42" rx="4" class="bx"/>
-        <text x="476" y="332" class="t-sub">09:15:02.000000000</text>
-        <text x="476" y="349" class="t-sub">staleness check</text>
-
-        <text x="580" y="384" class="t-lbl mid">&#8942;</text>
-        <text x="580" y="418" class="t-lbl mid">a tie with no defined order</text>
-        <text x="580" y="436" class="t-lbl mid">is a non-reproducible backtest</text>
+        <rect x="440" y="48" width="280" height="424" rx="8" class="band"/>
+        <text x="580" y="78" class="t-ttl mid f-core">EVENT QUEUE</text>
+        <text x="580" y="100" class="t-sub mid">ordered by</text>
+        <text x="580" y="118" class="t-sub mid">(timestamp, class, seq)</text>
+        <line x1="460" y1="134" x2="700" y2="134" stroke="var(--core)" stroke-width="1" opacity=".4"/>
+        <rect x="462" y="150" width="236" height="42" rx="4" class="bx"/>
+        <text x="476" y="168" class="t-sub">21:15:00.000000100</text><text x="476" y="185" class="t-sub">market &middot; OrderAdd</text>
+        <rect x="462" y="202" width="236" height="42" rx="4" class="bx-bt"/>
+        <text x="476" y="220" class="t-sub">21:15:00.000000100</text><text x="476" y="237" class="t-sub">timer &#8212; same ns, seq breaks tie</text>
+        <rect x="462" y="254" width="236" height="42" rx="4" class="bx-bt"/>
+        <text x="476" y="272" class="t-sub">21:15:00.000250000</text><text x="476" y="289" class="t-sub">your order reaches MCX</text>
+        <rect x="462" y="306" width="236" height="42" rx="4" class="bx"/>
+        <text x="476" y="324" class="t-sub">21:15:02.000000000</text><text x="476" y="341" class="t-sub">staleness check</text>
+        <text x="580" y="378" class="t-lbl mid">&#8942;</text>
+        <text x="580" y="412" class="t-lbl mid">a tie with no defined order</text>
+        <text x="580" y="430" class="t-lbl mid">is a non-reproducible run</text>
 
         <line x1="720" y1="200" x2="796" y2="200" class="ln-core" marker-end="url(#a3c)"/>
         <text x="758" y="190" class="t-lbl mid">pop</text>
 
-        <rect x="800" y="106" width="340" height="76" rx="6" class="bx-core"/>
-        <text x="970" y="134" class="t-ttl mid">SET CLOCK</text>
-        <text x="970" y="154" class="t-sub mid">now = event.timestamp</text>
-        <text x="970" y="172" class="t-sub mid">never reads the system clock</text>
+        <rect x="800" y="106" width="340" height="72" rx="6" class="bx-core"/>
+        <text x="970" y="132" class="t-ttl mid">SET CLOCK</text>
+        <text x="970" y="152" class="t-sub mid">now = event.timestamp</text>
+        <text x="970" y="170" class="t-sub mid">monotonic &#8212; never steps back</text>
+        <line x1="970" y1="178" x2="970" y2="206" class="ln-core" marker-end="url(#a3c)"/>
+        <rect x="800" y="208" width="340" height="72" rx="6" class="bx-core"/>
+        <text x="970" y="234" class="t-ttl mid">DISPATCH</text>
+        <text x="970" y="254" class="t-sub mid">to the registered handler</text>
+        <text x="970" y="272" class="t-sub mid">book &middot; strategy &middot; exec &middot; venue</text>
+        <line x1="970" y1="280" x2="970" y2="308" class="ln-core" marker-end="url(#a3c)"/>
+        <rect x="800" y="310" width="340" height="72" rx="6" class="bx-core"/>
+        <text x="970" y="336" class="t-ttl mid">HANDLER MAY ENQUEUE</text>
+        <text x="970" y="356" class="t-sub mid">timers, orders, reports</text>
+        <text x="970" y="374" class="t-sub mid">always at a future timestamp</text>
 
-        <line x1="970" y1="182" x2="970" y2="210" class="ln-core" marker-end="url(#a3c)"/>
-
-        <rect x="800" y="212" width="340" height="76" rx="6" class="bx-core"/>
-        <text x="970" y="240" class="t-ttl mid">DISPATCH</text>
-        <text x="970" y="260" class="t-sub mid">to the registered handler</text>
-        <text x="970" y="278" class="t-sub mid">book &middot; strategy &middot; exec &middot; venue</text>
-
-        <line x1="970" y1="288" x2="970" y2="316" class="ln-core" marker-end="url(#a3c)"/>
-
-        <rect x="800" y="318" width="340" height="76" rx="6" class="bx-core"/>
-        <text x="970" y="346" class="t-ttl mid">HANDLER MAY ENQUEUE</text>
-        <text x="970" y="366" class="t-sub mid">new timers, orders, reports</text>
-        <text x="970" y="384" class="t-sub mid">always at a future timestamp</text>
-
-        <polyline points="1140,356 1190,356 1190,510 580,510 580,468" class="ln-core" marker-end="url(#a3c)"/>
-        <text x="880" y="532" class="t-lbl mid">the loop closes here &#8212; time only ever moves forward</text>
+        <polyline points="1140,346 1190,346 1190,516 580,516 580,476" class="ln-core" marker-end="url(#a3c)"/>
+        <text x="880" y="542" class="t-lbl mid">the loop closes here &#8212; time only ever moves forward</text>
       </svg>
     </div>
-    <figcaption><b>Figure 3.</b> Note the second and third queue entries. A strategy timer landing on the same nanosecond as a market event needs a defined winner, and an order submitted at T entering the queue at T+250&micro;s is what makes latency modelling expressible at all &mdash; without a scheduler there is nowhere to put that delay. In live the same interface is backed by real timers, so strategy code is unchanged.</figcaption>
+    <figcaption><b>Figure 3.</b> The second and third queue entries carry the design. A timer landing on the same nanosecond as a market event needs a defined winner, and an order submitted at T entering the queue at T+250&micro;s is what makes latency modelling expressible &mdash; without a scheduler there is nowhere to put that delay.</figcaption>
   </figure>
 </section>
 
+<!-- ============ FIGURE 4 ============ -->
 <section>
   <div class="col">
-    <h2>The internal event vocabulary</h2>
-    <p>This is where exchange-agnostic designs usually fail. The tempting move is to define internal events as the union of everything all three exchanges publish, which produces a wide struct full of optional fields &mdash; and then the core starts branching on which fields are populated, and exchange-specificity is back, just hidden.</p>
-    <p>Define events by <strong>what the core must do</strong> instead. If a decoder cannot express something in that vocabulary, the vocabulary is wrong; widening the struct is not the fix.</p>
-  </div>
-
-  <div class="codeblock"><span class="cm">// the core needs to maintain a book, track trades, know session state</span>
-OrderAdd    { instrument, order_id, side, price_ticks, qty, ts }
-OrderModify { instrument, order_id, price_ticks, qty, ts }
-OrderCancel { instrument, order_id, ts }
-Trade       { instrument, buy_id, sell_id, price_ticks, qty, ts }
-TradeCancel { instrument, buy_id, sell_id, price_ticks, qty, ts }
-SessionPhase{ scope, phase, ts }
-BookReset   { instrument, reason, ts }   <span class="cm">// gap, recovery, DR switchover</span>
-
-<span class="cm">// NOT this — the union trap:</span>
-<span class="cm">// MarketEvent { order_id: Option&lt;u64&gt;, level_idx: Option&lt;u8&gt;, ... }</span></div>
-
-  <div class="col">
-    <p>The harder problem is that these two families are not interchangeable. NSE MTBT is order-by-order, so every resting order has an identity and exact queue position is computable. Many feeds publish only aggregated depth, where it simply is not. Flatten them into one book type and a strategy relying on queue position will work on NSE and quietly degrade to guesswork elsewhere.</p>
+    <h2>MBO and MBP are not interchangeable</h2>
+    <p>MCX gives order-by-order data, so exact queue position is computable. Quincy gives aggregated depth, where it simply is not. Flatten them into one book type and a strategy relying on queue position works on MCX and quietly degrades to guesswork on the signal venues.</p>
   </div>
 
   <figure>
     <div class="figbox">
-      <svg viewBox="0 0 1200 470" role="img" aria-label="Two event families: order-by-order MBO with OrderAdd, OrderModify, OrderCancel and Trade from NSE MTBT; and aggregated depth MBP with LevelUpdate, LevelDelete and Snapshot. Both implement a common Book trait exposing best bid, best ask, depth and quantity at price, but queue position is available only on MBO books.">
-        <defs>
-          <marker id="a4c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker>
-        </defs>
+      <svg viewBox="0 0 1200 460" role="img" aria-label="MCX provides order-by-order data supporting exact queue position; CME and DGCX provide aggregated depth which does not. Both satisfy a common Book trait, but queue position is available only on MBO books, enforced by the type system.">
+        <defs><marker id="a4c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker></defs>
 
-        <rect x="60" y="56" width="480" height="180" rx="8" class="bx-core"/>
-        <text x="300" y="86" class="t-ttl mid">ORDER-BY-ORDER &#8212; MBO</text>
-        <line x1="84" y1="100" x2="516" y2="100" stroke="var(--line)" stroke-width="1"/>
-        <text x="84" y="124" class="t-sub">OrderAdd / OrderModify / OrderCancel</text>
-        <text x="84" y="148" class="t-sub">Trade / TradeCancel</text>
-        <text x="84" y="176" class="t-sub">every resting order has an identity</text>
-        <text x="84" y="200" class="t-sub">you know exactly who is ahead of you</text>
-        <text x="84" y="224" class="t-sub f-core">source: NSE MTBT</text>
+        <rect x="60" y="50" width="480" height="176" rx="8" class="bx-core"/>
+        <text x="300" y="80" class="t-ttl mid">MboBook &#8212; ORDER BY ORDER</text>
+        <line x1="84" y1="94" x2="516" y2="94" stroke="var(--line)" stroke-width="1"/>
+        <text x="84" y="118" class="t-sub">OrderAdd / Modify / ModifySamePriority</text>
+        <text x="84" y="142" class="t-sub">OrderDelete / Partial &amp; Full Execution</text>
+        <text x="84" y="170" class="t-sub">every resting order individually visible</text>
+        <text x="84" y="194" class="t-sub">you know exactly who is ahead of you</text>
+        <text x="84" y="216" class="t-sub f-core">MCX &#8212; where we quote</text>
 
-        <rect x="660" y="56" width="480" height="180" rx="8" class="bx-core"/>
-        <text x="900" y="86" class="t-ttl mid">AGGREGATED DEPTH &#8212; MBP</text>
-        <line x1="684" y1="100" x2="1116" y2="100" stroke="var(--line)" stroke-width="1"/>
-        <text x="684" y="124" class="t-sub">LevelUpdate / LevelDelete / Snapshot</text>
-        <text x="684" y="148" class="t-sub">Trade</text>
-        <text x="684" y="176" class="t-sub">only totals per price level</text>
-        <text x="684" y="200" class="t-sub">individual orders are not visible</text>
-        <text x="684" y="224" class="t-sub f-core">source: depth-only feeds</text>
+        <rect x="660" y="50" width="480" height="176" rx="8" class="bx-core"/>
+        <text x="900" y="80" class="t-ttl mid">MbpBook &#8212; AGGREGATED DEPTH</text>
+        <line x1="684" y1="94" x2="1116" y2="94" stroke="var(--line)" stroke-width="1"/>
+        <text x="684" y="118" class="t-sub">LevelUpdate / LevelDelete / Trade</text>
+        <text x="684" y="142" class="t-sub">totals per price level only</text>
+        <text x="684" y="170" class="t-sub">individual orders not visible</text>
+        <text x="684" y="194" class="t-sub">CME 5 levels &middot; DGCX 1 level</text>
+        <text x="684" y="216" class="t-sub f-core">signal venues only</text>
 
-        <polyline points="300,236 300,272 588,272 588,300" class="ln-core" marker-end="url(#a4c)"/>
-        <polyline points="900,236 900,272 612,272 612,300" class="ln-core" marker-end="url(#a4c)"/>
+        <polyline points="300,226 300,262 588,262 588,290" class="ln-core" marker-end="url(#a4c)"/>
+        <polyline points="900,226 900,262 612,262 612,290" class="ln-core" marker-end="url(#a4c)"/>
 
-        <rect x="300" y="302" width="600" height="132" rx="8" class="band"/>
-        <text x="600" y="330" class="t-ttl mid f-core">trait Book</text>
-        <line x1="324" y1="346" x2="876" y2="346" stroke="var(--core)" stroke-width="1" opacity=".4"/>
-        <text x="324" y="370" class="t-sub">best_bid &middot; best_ask &middot; depth(n) &middot; qty_at_price</text>
-        <text x="876" y="370" class="t-sub end f-core">both</text>
-        <text x="324" y="398" class="t-sub">queue_position(order_id)</text>
-        <text x="876" y="398" class="t-sub end f-bt">MBO only</text>
-        <text x="600" y="422" class="t-lbl mid">absence enforced by the type system, not by a runtime null</text>
+        <rect x="300" y="292" width="600" height="126" rx="8" class="band"/>
+        <text x="600" y="320" class="t-ttl mid f-core">trait Book</text>
+        <line x1="324" y1="334" x2="876" y2="334" stroke="var(--core)" stroke-width="1" opacity=".4"/>
+        <text x="324" y="358" class="t-sub">best_bid &middot; best_ask &middot; depth(n) &middot; qty_at_price</text>
+        <text x="876" y="358" class="t-sub end f-core">both</text>
+        <text x="324" y="386" class="t-sub">queue_position(handle)</text>
+        <text x="876" y="386" class="t-sub end f-bt">MBO only</text>
+        <text x="600" y="410" class="t-lbl mid">absent by type, not by a runtime null</text>
       </svg>
     </div>
-    <figcaption><b>Figure 4.</b> Both families satisfy a common read interface, so the core stays exchange-agnostic. The capability that genuinely differs is exposed rather than papered over: a strategy asking for queue position on an MBP book should fail to compile, not receive a plausible estimate it will mistake for a measurement.</figcaption>
+    <figcaption><b>Figure 4.</b> Both satisfy a common read interface so the qtrade stays exchange-agnostic, but the capability that genuinely differs is exposed rather than papered over. A strategy asking for queue position on a CME book should fail to compile, not receive a plausible estimate it will mistake for a measurement.</figcaption>
   </figure>
 </section>
 
+<!-- ============ FIGURE 5 ============ -->
 <section>
   <div class="col">
-    <h2>The simulated exchange sees nothing of yours</h2>
-    <p>The venue is not part of your process. In production NSE has its own book and your code cannot look inside it, so if the simulator reads your cache you have built a coupling that does not exist in production &mdash; which is precisely the sort of thing that makes a backtest lie.</p>
-    <p>There is a sharper argument too. Your feed-derived book can go <code>STALE</code> after a packet gap. A real exchange does not become uncertain because <em>your</em> receiver dropped packets. A simulator reading your cache inherits your corruption and starts filling you against a book that never existed. Independence removes that whole failure class, and makes the simulator unit-testable against synthetic order flow with no core dependency at all.</p>
+    <h2>The Simulated Exchange sees nothing of yours</h2>
+    <p>In production the venue is not inside your process. If the simulator read your Cache you would create a coupling that does not exist live &mdash; and one with a specific failure mode.</p>
+    <p>Your feed-derived book can go <code>STALE</code> after a packet gap. <strong>A real exchange does not become uncertain because your receiver dropped packets.</strong> A simulator reading your Cache would inherit your corruption and fill you against a book that never existed.</p>
   </div>
 
   <figure>
     <div class="figbox">
-      <svg viewBox="0 0 1200 500" role="img" aria-label="The normalized event stream feeds both the core and the simulated exchange separately. Between the core and the simulated exchange there is no shared state - only two arrows cross the boundary, order commands going right and execution reports coming back left.">
+      <svg viewBox="0 0 1200 500" role="img" aria-label="The normalized event stream feeds the qtrade and the Simulated Exchange as two independent consumers. Between them there is no shared state, with only two arrows crossing the boundary: order commands going right and execution reports returning left.">
         <defs>
           <marker id="a5c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker>
           <marker id="a5b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-bt"/></marker>
         </defs>
-
         <rect x="340" y="40" width="520" height="56" rx="6" class="bx-core"/>
         <text x="600" y="64" class="t-ttl mid">NORMALIZED EVENT STREAM</text>
         <text x="600" y="84" class="t-sub mid">one source, two independent consumers</text>
-
         <polyline points="600,96 600,130 240,130 240,166" class="ln-core" marker-end="url(#a5c)"/>
         <polyline points="600,96 600,130 960,130 960,166" class="ln-bt" marker-end="url(#a5b)"/>
 
         <rect x="60" y="168" width="360" height="200" rx="8" class="bx-core"/>
-        <text x="240" y="196" class="t-ttl mid">CORE</text>
+        <text x="240" y="196" class="t-ttl mid">QTRADE</text>
         <line x1="84" y1="210" x2="396" y2="210" stroke="var(--line)" stroke-width="1"/>
         <text x="84" y="234" class="t-sub">book builder</text>
         <text x="84" y="258" class="t-sub">cache &#8212; may go STALE</text>
         <text x="84" y="282" class="t-sub">strategy</text>
         <text x="84" y="306" class="t-sub">execution engine</text>
-        <text x="84" y="330" class="t-sub">risk / portfolio</text>
-        <text x="84" y="356" class="t-sub f-core">all subscribed instruments</text>
+        <text x="84" y="330" class="t-sub">validation &middot; OTR &middot; watchdog</text>
+        <text x="84" y="356" class="t-sub f-core">filtered instrument set</text>
 
         <rect x="780" y="168" width="360" height="200" rx="8" class="bx-bt"/>
         <text x="960" y="196" class="t-ttl mid">SIMULATED EXCHANGE</text>
         <line x1="804" y1="210" x2="1116" y2="210" stroke="var(--bt)" stroke-width="1" opacity=".4"/>
         <text x="804" y="234" class="t-sub">its own books</text>
-        <text x="804" y="258" class="t-sub">never goes stale from your gaps</text>
-        <text x="804" y="282" class="t-sub">latency model</text>
-        <text x="804" y="306" class="t-sub">queue position &amp; fills</text>
-        <text x="804" y="330" class="t-sub">priority rule on modify</text>
-        <text x="804" y="356" class="t-sub f-bt">traded instruments only</text>
+        <text x="804" y="258" class="t-sub">never stale from your gaps</text>
+        <text x="804" y="282" class="t-sub">latency &middot; queue position</text>
+        <text x="804" y="306" class="t-sub">BOC reject &middot; MMP &middot; OTR &middot; STP</text>
+        <text x="804" y="330" class="t-sub">Lean cancel on loss &amp; EOD</text>
+        <text x="804" y="356" class="t-sub f-bt">same filtered set</text>
 
         <line x1="422" y1="232" x2="776" y2="232" class="ln-core" marker-end="url(#a5c)"/>
         <text x="600" y="224" class="t-lbl mid">order commands</text>
-
         <line x1="776" y1="330" x2="422" y2="330" class="ln-bt" marker-end="url(#a5b)"/>
         <text x="600" y="322" class="t-lbl mid">execution reports</text>
 
         <line x1="440" y1="266" x2="760" y2="266" class="ln dash"/>
         <line x1="584" y1="266" x2="616" y2="298" stroke="var(--bt)" stroke-width="2.4" stroke-linecap="round"/>
         <line x1="616" y1="266" x2="584" y2="298" stroke="var(--bt)" stroke-width="2.4" stroke-linecap="round"/>
-        <text x="600" y="292" class="t-lbl mid f-bt">&#8203;</text>
-        <text x="600" y="404" class="t-lbl mid">no shared state, no read path, no cache access &#8212; exactly two arrows cross this boundary</text>
-        <text x="600" y="440" class="t-lbl mid f-bt">the same two arrows the live gateway uses, which is why swapping them is a config change</text>
+        <text x="600" y="406" class="t-lbl mid">no shared state, no read path &#8212; exactly two arrows cross this boundary</text>
+        <text x="600" y="442" class="t-lbl mid f-bt">the same two the live gateway uses, which is why swapping them is configuration</text>
       </svg>
     </div>
-    <figcaption><b>Figure 5.</b> The interface is deliberately impoverished: commands in, reports out. Because the live gateway presents that identical pair, the execution engine cannot distinguish them &mdash; and the simulator only needs books for instruments you actually trade, not everything you subscribe to, so the duplicated book cost is far smaller than it first appears.</figcaption>
+    <figcaption><b>Figure 5.</b> The interface is deliberately impoverished: commands in, reports out. Because the live gateway presents the identical pair, the ExecutionEngine cannot distinguish them. The simulator also becomes unit-testable against synthetic order flow with zero qtrade dependency.</figcaption>
   </figure>
-
-  <div class="callout">
-    <span class="tagline">Still open</span>
-    <h3>How many book instances does the core create?</h3>
-    <p>One shared, one per strategy, or one per group &mdash; deliberately undecided. The design keeps the choice open by making the book a pure function of the event stream with no other dependencies, so instance count is a startup wiring decision rather than a structural one. Benchmark it on a real day of FO capture before committing: build books for your realistic subscription set on one core, measure the fraction of a core it costs, multiply by strategy count. If it fits, per-strategy isolation is nearly free and worth having.</p>
-  </div>
 </section>
 
+<!-- ============ FIGURE 6 ============ -->
 <section>
   <div class="col">
     <h2>Why the simulator cannot fill you at T</h2>
-    <p>Between the moment the exchange stamps an event and the moment your order reaches the matching engine, other participants have already acted. This is the largest single source of backtest results that do not survive production.</p>
-    <p>One asymmetry to be careful about: recorded MTBT lets you estimate <em>feed</em> latency, though the difference between exchange and capture timestamps includes clock offset unless you are PTP-synced, so trust the distribution shape rather than the absolute mean. <strong>Outbound latency &mdash; decide to matching engine &mdash; is not observable from market data at all.</strong> Until you have real order round-trips it is an assumption, so model it pessimistically.</p>
+    <p>Between the exchange stamping an event and your order reaching the matching engine, other participants have already acted. Recorded MTBT lets you estimate <em>feed</em> latency; <strong>outbound latency is not observable from market data at all</strong> and stays a parameter until real round-trips exist.</p>
   </div>
 
   <figure>
     <div class="figbox">
-      <svg viewBox="0 0 1200 400" role="img" aria-label="A timeline showing an exchange event, the application receiving it after feed latency, the strategy deciding after decision latency, and the order arriving at the matching engine after send latency; four other market events arrive during the send window, so the order joins the queue behind them.">
+      <svg viewBox="0 0 1200 400" role="img" aria-label="A timeline showing an exchange event, the application receiving it after feed latency, the strategy deciding, and the order arriving after send latency, during which four other market events arrive and queue ahead.">
         <defs>
           <marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-line"/></marker>
           <marker id="a6b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-bt"/></marker>
         </defs>
-
         <rect x="560" y="118" width="330" height="150" class="shade" rx="4"/>
         <text x="725" y="140" class="t-lbl mid f-bt">market moves while your order is in flight</text>
-
         <line x1="90" y1="230" x2="1140" y2="230" class="ln" marker-end="url(#a6)"/>
         <text x="1140" y="256" class="t-lbl end">time</text>
-
         <line x1="140" y1="222" x2="140" y2="238" class="ln"/>
         <line x1="380" y1="222" x2="380" y2="238" class="ln"/>
         <line x1="560" y1="222" x2="560" y2="238" class="ln"/>
         <line x1="890" y1="222" x2="890" y2="238" class="ln"/>
-
         <circle cx="140" cy="230" r="6" fill="var(--core)"/>
         <circle cx="380" cy="230" r="6" fill="var(--core)"/>
         <circle cx="560" cy="230" r="6" fill="var(--core)"/>
         <circle cx="890" cy="230" r="6" fill="var(--bt)"/>
-
-        <text x="140" y="198" class="t-ttl-sm mid">exchange stamps</text>
-        <text x="140" y="215" class="t-sub mid">book changes</text>
-        <text x="380" y="198" class="t-ttl-sm mid">you see it</text>
-        <text x="380" y="215" class="t-sub mid">decoded</text>
-        <text x="560" y="198" class="t-ttl-sm mid">you decide</text>
-        <text x="560" y="215" class="t-sub mid">order emitted</text>
-        <text x="890" y="198" class="t-ttl-sm mid f-bt">order arrives</text>
-        <text x="890" y="215" class="t-sub mid f-bt">joins queue</text>
-
+        <text x="140" y="198" class="t-ttl-sm mid">MCX stamps</text><text x="140" y="215" class="t-sub mid">book changes</text>
+        <text x="380" y="198" class="t-ttl-sm mid">you see it</text><text x="380" y="215" class="t-sub mid">decoded</text>
+        <text x="560" y="198" class="t-ttl-sm mid">you decide</text><text x="560" y="215" class="t-sub mid">order emitted</text>
+        <text x="890" y="198" class="t-ttl-sm mid f-bt">order arrives</text><text x="890" y="215" class="t-sub mid f-bt">joins queue</text>
         <line x1="140" y1="272" x2="380" y2="272" class="ln" marker-start="url(#a6)" marker-end="url(#a6)"/>
         <text x="260" y="292" class="t-lbl mid">feed latency &#8212; measurable</text>
         <line x1="380" y1="272" x2="560" y2="272" class="ln" marker-start="url(#a6)" marker-end="url(#a6)"/>
         <text x="470" y="292" class="t-lbl mid">decide</text>
         <line x1="560" y1="272" x2="890" y2="272" class="ln-bt" marker-start="url(#a6b)" marker-end="url(#a6b)"/>
         <text x="725" y="292" class="t-lbl mid f-bt">send latency &#8212; not in the recording</text>
-
         <text x="90" y="60" class="t-zone">OTHER PARTICIPANTS&#8217; ORDERS</text>
         <polygon points="620,100 630,118 610,118" fill="var(--live)"/>
         <polygon points="700,100 710,118 690,118" fill="var(--live)"/>
@@ -701,144 +688,224 @@ BookReset   { instrument, reason, ts }   <span class="cm">// gap, recovery, DR s
         <line x1="700" y1="118" x2="700" y2="224" class="ln-live dash"/>
         <line x1="790" y1="118" x2="790" y2="224" class="ln-live dash"/>
         <line x1="850" y1="118" x2="850" y2="224" class="ln-live dash"/>
-
         <rect x="700" y="320" width="440" height="56" rx="6" class="bx-bt"/>
         <text x="920" y="344" class="t-ttl-sm mid">You are behind all four of them</text>
         <text x="920" y="362" class="t-sub mid">naive backtests place you at the front instead</text>
         <line x1="890" y1="238" x2="890" y2="318" class="ln-bt dash" marker-end="url(#a6b)"/>
       </svg>
     </div>
-    <figcaption><b>Figure 6.</b> The scheduler in Figure 3 is what makes this expressible: the order submitted at the decision instant enters the queue with a timestamp of <code>T + send_latency</code>, so every market event in the shaded span is processed first and genuinely gets ahead of you in the queue.</figcaption>
+    <figcaption><b>Figure 6.</b> The Scheduler is what makes this expressible: the order submitted at the decision instant enters the queue at <code>T + send_latency</code>, so every market event in the shaded span is processed first and genuinely queues ahead of you.</figcaption>
   </figure>
 </section>
 
+<!-- ============ FIGURE 7 ============ -->
+<section>
+  <div class="col">
+    <h2>Two recording points, and neither substitutes for the other</h2>
+    <p>The Journal cannot be derived from per-stream captures, because live consumes in <em>arrival</em> order and a timestamp merge may legitimately produce a different interleaving. It has to be recorded where the merge happens.</p>
+  </div>
+
+  <figure>
+    <div class="figbox">
+      <svg viewBox="0 0 1200 480" role="img" aria-label="Per-stream raw capture happens at the transports, preserving native order and per-channel sequence numbers for development replay. The post-merge journal is recorded at the qtrade boundary in actual consumption order, used for parity verification of live sessions.">
+        <defs>
+          <marker id="a7c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker>
+          <marker id="a7b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-bt"/></marker>
+        </defs>
+        <rect x="60" y="46" width="200" height="50" rx="6" class="bx-live"/>
+        <text x="160" y="68" class="t-ttl-sm mid">MCX streams</text><text x="160" y="86" class="t-sub mid">incremental + snapshot, A/B</text>
+        <rect x="290" y="46" width="200" height="50" rx="6" class="bx-live"/>
+        <text x="390" y="68" class="t-ttl-sm mid">Quincy streams</text><text x="390" y="86" class="t-sub mid">CME + DGCX</text>
+
+        <line x1="160" y1="96" x2="160" y2="132" class="ln-live" marker-end="url(#a7c)"/>
+        <line x1="390" y1="96" x2="390" y2="132" class="ln-live" marker-end="url(#a7c)"/>
+
+        <rect x="60" y="134" width="430" height="62" rx="6" class="bx"/>
+        <text x="275" y="158" class="t-ttl mid">TRANSPORTS</text>
+        <text x="275" y="177" class="t-sub mid">stamp monotonic capture time on receipt</text>
+        <text x="275" y="192" class="t-sub mid">capture where you consume</text>
+
+        <line x1="490" y1="165" x2="616" y2="165" class="ln-bt" marker-end="url(#a7b)"/>
+        <rect x="620" y="134" width="380" height="86" rx="6" class="bx-bt"/>
+        <text x="810" y="160" class="t-ttl mid">PER-STREAM RAW CAPTURE</text>
+        <text x="810" y="180" class="t-sub mid">native order &middot; per-channel sequence intact</text>
+        <text x="810" y="198" class="t-sub mid">feeds development replay</text>
+        <text x="810" y="214" class="t-sub mid f-bt">re-merged on capture timestamp</text>
+
+        <line x1="275" y1="196" x2="275" y2="232" class="ln-core" marker-end="url(#a7c)"/>
+        <rect x="60" y="234" width="430" height="62" rx="6" class="bx"/>
+        <text x="275" y="258" class="t-ttl mid">SEQUENCER</text>
+        <text x="275" y="277" class="t-sub mid">merge &#8594; one ordered stream</text>
+        <text x="275" y="292" class="t-sub mid">live takes arrival order</text>
+
+        <line x1="490" y1="265" x2="616" y2="265" class="ln-bt" marker-end="url(#a7b)"/>
+        <rect x="620" y="234" width="380" height="86" rx="6" class="bx-bt"/>
+        <text x="810" y="260" class="t-ttl mid">POST-MERGE JOURNAL</text>
+        <text x="810" y="280" class="t-sub mid">actual qtrade consumption order</text>
+        <text x="810" y="298" class="t-sub mid">plus every command and report</text>
+        <text x="810" y="314" class="t-sub mid f-bt">feeds parity verification</text>
+
+        <line x1="275" y1="296" x2="275" y2="332" class="ln-core" marker-end="url(#a7c)"/>
+        <rect x="60" y="334" width="430" height="54" rx="6" class="band"/>
+        <text x="275" y="357" class="t-ttl mid f-core">QTRADE</text>
+        <text x="275" y="376" class="t-sub mid">one thread</text>
+
+        <text x="600" y="424" class="t-lbl mid">the journal cannot be derived from the raw captures &#8212; a timestamp merge</text>
+        <text x="600" y="444" class="t-lbl mid">may legitimately order events differently than live arrival did</text>
+        <text x="600" y="468" class="t-lbl mid f-bt">on ring overflow: drop and alarm &#8212; a stalled engine is worse than a gap in a recording</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 7.</b> Raw capture happens in the Transport threads rather than a separate process, because a capture at a mirror port sees packets at a slightly different moment than the engine's socket does &mdash; and that difference is exactly the latency the design is trying to model honestly.</figcaption>
+  </figure>
+</section>
+
+<!-- ============ FIGURE 8 ============ -->
+<section>
+  <div class="col">
+    <h2>Configuration in, results out</h2>
+    <p>Figure 1 shows the data and order paths. This is the other half: what defines a run, and what a run produces. Both travel over the <strong>Control Dispatcher</strong> &mdash; the low-rate counterpart to the Event Dispatcher, where observers register by wiring rather than by anyone publishing to them.</p>
+    <p>The split between the two config files matters more than it looks. <strong>Run identity is <code>(config hash, build hash)</code></strong>. If multicast addresses lived in the hashed config, moving to a different colocation rack would change your run hash and make every previous result appear incomparable &mdash; wrong, since an endpoint has no bearing on outcomes.</p>
+  </div>
+
+  <figure>
+    <div class="figbox">
+      <svg viewBox="0 0 1200 570" role="img" aria-label="Run configuration is hashed into run identity and feeds the qtrade; deployment configuration is not hashed and feeds the transports. The qtrade emits over the Control Dispatcher to three observers: reporting in three tiers, alerts, and the journal.">
+        <defs>
+          <marker id="a8c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker>
+          <marker id="a8b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-bt"/></marker>
+        </defs>
+
+        <text x="40" y="30" class="t-zone">CONFIGURATION</text>
+        <text x="470" y="30" class="t-zone f-core">ENGINE</text>
+        <text x="820" y="30" class="t-zone">OBSERVERS</text>
+
+        <rect x="40" y="48" width="350" height="188" rx="8" class="bx-core"/>
+        <text x="215" y="74" class="t-ttl mid">RUN CONFIG</text>
+        <text x="215" y="93" class="t-sub mid f-core">hashed into run identity</text>
+        <line x1="60" y1="104" x2="370" y2="104" stroke="var(--line)" stroke-width="1"/>
+        <text x="60" y="126" class="t-sub">recordings + content hashes</text>
+        <text x="60" y="146" class="t-sub">full strategy set + parameters</text>
+        <text x="60" y="166" class="t-sub">latency model + seed</text>
+        <text x="60" y="186" class="t-sub">simulator switches (OTR, validation)</text>
+        <text x="60" y="206" class="t-sub">warmup window + bootstrap mode</text>
+        <text x="60" y="226" class="t-sub">calendar + master versions</text>
+
+        <rect x="40" y="266" width="350" height="150" rx="8" class="bx-live"/>
+        <text x="215" y="292" class="t-ttl mid">DEPLOYMENT CONFIG</text>
+        <text x="215" y="311" class="t-sub mid f-live">NOT hashed &#8212; excluded from run identity</text>
+        <line x1="60" y1="322" x2="370" y2="322" stroke="var(--line)" stroke-width="1"/>
+        <text x="60" y="344" class="t-sub">multicast groups, ports, interfaces</text>
+        <text x="60" y="364" class="t-sub">A/B service pairs, snapshot channels</text>
+        <text x="60" y="384" class="t-sub">ETI session credentials</text>
+        <text x="60" y="404" class="t-sub">environment: prod | UAT | simulation</text>
+
+        <line x1="392" y1="142" x2="446" y2="142" class="ln-core" marker-end="url(#a8c)"/>
+        <line x1="392" y1="340" x2="446" y2="340" class="ln-live" marker-end="url(#a8c)"/>
+
+        <rect x="450" y="100" width="300" height="128" rx="8" class="band"/>
+        <text x="600" y="128" class="t-ttl mid f-core">QTRADE</text>
+        <text x="600" y="150" class="t-sub mid">one thread</text>
+        <text x="600" y="170" class="t-sub mid">strategies &middot; execution</text>
+        <text x="600" y="190" class="t-sub mid">accounting &middot; validation</text>
+        <text x="600" y="212" class="t-sub mid f-core">never reads deployment config</text>
+
+        <rect x="450" y="300" width="300" height="80" rx="6" class="bx"/>
+        <text x="600" y="326" class="t-ttl mid">TRANSPORTS</text>
+        <text x="600" y="345" class="t-sub mid">where the process connects</text>
+        <text x="600" y="365" class="t-sub mid">validated at startup, fails loudly</text>
+
+        <line x1="600" y1="228" x2="600" y2="296" class="ln-core dash" marker-end="url(#a8c)"/>
+        <text x="612" y="268" class="t-lbl">framed messages</text>
+
+        <line x1="752" y1="150" x2="806" y2="150" class="ln-core" marker-end="url(#a8c)"/>
+        <rect x="810" y="118" width="350" height="64" rx="6" class="bx-core"/>
+        <text x="985" y="143" class="t-ttl mid">CONTROL DISPATCHER</text>
+        <text x="985" y="162" class="t-sub mid">typed handler lists &middot; low rate</text>
+        <text x="985" y="177" class="t-sub mid">nothing publishes to observers</text>
+
+        <polyline points="850,182 790,182 790,252 806,252" class="ln-core" marker-end="url(#a8c)"/>
+        <polyline points="790,252 790,432 806,432" class="ln-core" marker-end="url(#a8c)"/>
+        <polyline points="790,432 790,500 806,500" class="ln-core" marker-end="url(#a8c)"/>
+
+        <rect x="810" y="222" width="350" height="176" rx="6" class="bx-bt"/>
+        <text x="985" y="248" class="t-ttl mid">REPORTING</text>
+        <line x1="830" y1="258" x2="1140" y2="258" stroke="var(--bt)" stroke-width="1" opacity=".35"/>
+        <text x="830" y="280" class="t-sub">tier 1 &#8212; always: P&amp;L both levels,</text>
+        <text x="830" y="298" class="t-sub">inventory, markout, OTR, violations</text>
+        <text x="830" y="322" class="t-sub">tier 2 &#8212; switchable: every order,</text>
+        <text x="830" y="340" class="t-sub">queue position + markout per fill</text>
+        <text x="830" y="364" class="t-sub">tier 3 &#8212; strategy series: fair value,</text>
+        <text x="830" y="382" class="t-sub">skew, quote width, basis</text>
+
+        <rect x="810" y="410" width="350" height="52" rx="6" class="bx"/>
+        <text x="985" y="434" class="t-ttl-sm mid">ALERTS</text>
+        <text x="985" y="452" class="t-sub mid">staleness &middot; gaps &middot; risk &middot; watchdog</text>
+
+        <rect x="810" y="478" width="350" height="52" rx="6" class="bx"/>
+        <text x="985" y="502" class="t-ttl-sm mid">JOURNAL</text>
+        <text x="985" y="520" class="t-sub mid">live only &#8212; feeds parity verification</text>
+
+        <text x="600" y="440" class="t-lbl mid f-core">every output embeds the full run spec and both hashes</text>
+        <text x="600" y="466" class="t-lbl mid">so a result from three months ago explains what produced it</text>
+        <text x="600" y="510" class="t-lbl mid f-bt">observers are added by wiring &#8212; adding one touches no publisher</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 8.</b> Reporting, alerts and the journal all register the same way and none of them is known to the components they observe. That is what makes the verbose reporting tier switchable per run &mdash; a parameter sweep disables it and nothing else in the system is aware. <b>Warmup and bootstrap mode live in the run config</b>, so a run that started mid-session from a snapshot is distinguishable from one that replayed the full day.</figcaption>
+  </figure>
+</section>
+
+<!-- ============ RULES ============ -->
 <section>
   <div class="col">
     <h2>What keeps the modes identical</h2>
     <p>Shared code is necessary but not sufficient &mdash; shared code still diverges if it can reach ambient state. These constraints are what actually enforce parity, and they are cheapest to adopt before the first strategy exists.</p>
   </div>
   <div class="rules">
-    <div class="rule">
-      <span class="tagline">Injected time</span>
-      <h3>Nothing in the core reads a clock</h3>
-      <p>No system clock, no <code>random()</code>, no direct logging or file I/O. Time arrives only from the scheduler. This one rule prevents most divergence, and it is enforceable by simply not exposing the alternatives.</p>
-    </div>
-    <div class="rule">
-      <span class="tagline">Total ordering</span>
+    <div class="rule"><span class="tagline">Injected time</span>
+      <h3>Nothing in the qtrade reads a clock</h3>
+      <p>No system clock, no <code>random()</code>, no direct I/O. Time arrives only from the Scheduler. Monotonic for ordering, wall clock for meaning &mdash; so an NTP step cannot silently reorder events.</p></div>
+    <div class="rule"><span class="tagline">Total ordering</span>
       <h3>Every tie has a defined winner</h3>
-      <p>Events sharing a nanosecond are ordered by <code>(timestamp, class, seq)</code> with the sequence assigned at enqueue. Without this the same backtest run twice gives different answers, which is a correctness bug wearing a performance costume.</p>
-    </div>
-    <div class="rule">
-      <span class="tagline">Shared decoder</span>
-      <h3>One decoder per exchange, both paths</h3>
-      <p>Live and replay converge before decoding, so a decoder bug reproduces in backtest instead of waiting for production. Record raw packets per exchange to keep that property available.</p>
-    </div>
-    <div class="rule">
-      <span class="tagline">Capture order</span>
-      <h3>Do not sort by exchange timestamp</h3>
-      <p>Instruments are spread across streams with independent sequence numbers, and live cannot reorder across them. Replaying in capture order preserves the interleaving production will actually see.</p>
-    </div>
-    <div class="rule">
-      <span class="tagline">Venue isolation</span>
+      <p>Ordered by <code>(timestamp, class, seq)</code>, the sequence assigned at enqueue. Without it the same backtest run twice gives different answers &mdash; a correctness bug wearing a performance costume.</p></div>
+    <div class="rule"><span class="tagline">Shared decoder</span>
+      <h3>One decoder per protocol, both paths</h3>
+      <p>Live and replay converge before decoding, so a decoder defect reproduces in backtest instead of waiting for production.</p></div>
+    <div class="rule"><span class="tagline">Same source</span>
+      <h3>Session state per venue, not per mode</h3>
+      <p>MCX publishes its state and recordings preserve it, so backtest reads the same messages live does. A calendar-in-backtest split would mean unscheduled halts never appear in a backtest.</p></div>
+    <div class="rule"><span class="tagline">Venue isolation</span>
       <h3>The simulator reads nothing of yours</h3>
-      <p>Commands in, reports out, its own books. Identical interface to the live gateway, so the execution engine cannot tell them apart &mdash; and your feed gaps cannot corrupt it.</p>
-    </div>
-    <div class="rule">
-      <span class="tagline">Explicit staleness</span>
-      <h3>The strategy is told when the book is wrong</h3>
-      <p>After a gap and before recovery completes the book is untrustworthy. <code>UNINIT / RECOVERING / OK / STALE</code> is visible state, so a strategy can stand down rather than trade noise.</p>
-    </div>
+      <p>Commands in, reports out, its own books. Identical interface to the live gateway, so the ExecutionEngine cannot tell them apart &mdash; and your feed gaps cannot corrupt it.</p></div>
+    <div class="rule"><span class="tagline">Explicit staleness</span>
+      <h3>An uncertain book cannot quote</h3>
+      <p><code>UNINIT</code> and <code>RECOVERING</code> block quoting outright, enforced by the watchdog rather than by strategy convention &mdash; because the moment you most need quotes pulled is the moment the strategy is misbehaving.</p></div>
   </div>
 </section>
 
+<!-- ============ VALIDATION ============ -->
 <section>
   <div class="col">
-    <h2>Proving parity, not assuming it</h2>
-    <p>Because live records raw packets per exchange alongside every command and report, a production session can be re-run through the backtester and the two decision streams compared directly. Any divergence means the strategy reached ambient state it should not have been able to touch.</p>
-  </div>
-
-  <figure>
-    <div class="figbox">
-      <svg viewBox="0 0 1140 400" role="img" aria-label="A cycle: a live session writes raw packets, commands and reports to a journal; the journal is replayed through the same core; the resulting decisions are diffed against the recorded live decisions; identical means parity holds, divergent means a bug to fix before re-running.">
-        <defs>
-          <marker id="a7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-core"/></marker>
-        </defs>
-
-        <rect x="50" y="60" width="240" height="80" rx="6" class="bx-live"/>
-        <text x="170" y="94" class="t-ttl mid">Live session</text>
-        <text x="170" y="114" class="t-sub mid">real feeds, real venues</text>
-
-        <line x1="290" y1="100" x2="368" y2="100" class="ln-core" marker-end="url(#a7)"/>
-        <text x="329" y="90" class="t-lbl mid">writes</text>
-
-        <rect x="370" y="60" width="240" height="80" rx="6" class="bx"/>
-        <text x="490" y="88" class="t-ttl mid">JOURNAL</text>
-        <text x="490" y="107" class="t-sub mid">raw packets per exchange</text>
-        <text x="490" y="124" class="t-sub mid">commands &middot; reports &middot; clock reads</text>
-
-        <line x1="610" y1="100" x2="688" y2="100" class="ln-core" marker-end="url(#a7)"/>
-        <text x="649" y="90" class="t-lbl mid">feeds</text>
-
-        <rect x="690" y="60" width="240" height="80" rx="6" class="bx-bt"/>
-        <text x="810" y="94" class="t-ttl mid">Replayed</text>
-        <text x="810" y="114" class="t-sub mid">through the same core</text>
-
-        <polyline points="810,140 810,190 570,190 570,232" class="ln-core" marker-end="url(#a7)"/>
-        <polyline points="170,140 170,190 410,190 410,232" class="ln-core" marker-end="url(#a7)"/>
-        <text x="490" y="182" class="t-lbl mid">two decision streams</text>
-
-        <rect x="370" y="234" width="240" height="80" rx="6" class="bx-core"/>
-        <text x="490" y="268" class="t-ttl mid">DIFF</text>
-        <text x="490" y="288" class="t-sub mid">order-for-order comparison</text>
-
-        <line x1="368" y1="274" x2="292" y2="274" class="ln-core" marker-end="url(#a7)"/>
-        <rect x="50" y="234" width="240" height="80" rx="6" class="bx"/>
-        <text x="170" y="262" class="t-ttl-sm mid">Identical</text>
-        <text x="170" y="281" class="t-sub mid">parity holds &#8212; ship it</text>
-        <text x="170" y="299" class="t-sub mid">re-run every release</text>
-
-        <line x1="612" y1="274" x2="688" y2="274" class="ln-core" marker-end="url(#a7)"/>
-        <rect x="690" y="234" width="240" height="80" rx="6" class="bx-bt"/>
-        <text x="810" y="262" class="t-ttl-sm mid">Divergent</text>
-        <text x="810" y="281" class="t-sub mid">ambient state leaked in</text>
-        <text x="810" y="299" class="t-sub mid">a bug, always</text>
-
-        <polyline points="930,274 1000,274 1000,100 934,100" class="ln-core dash" marker-end="url(#a7)"/>
-        <text x="1010" y="192" class="t-lbl">fix, re-run</text>
-      </svg>
-    </div>
-    <figcaption><b>Figure 7.</b> Build the journal before the first strategy. Retrofitting it means re-running every result you have already trusted, and the earliest bugs &mdash; decoder edge cases, tie-breaking, timer semantics &mdash; are exactly the ones this catches.</figcaption>
-  </figure>
-</section>
-
-<section>
-  <div class="col">
-    <h2>Build order</h2>
-    <p>Correctness and stability first, in an order where each stage validates the one before it. Performance work is deliberately absent &mdash; no core pinning, no NUMA placement, no kernel bypass. Those are live-path concerns and premature until the throughput budget is measured against something that already works.</p>
+    <h2>Proving the simulator, not trusting it</h2>
+    <p>The Simulated Exchange is the component that can lie <em>silently</em>. A wrong book crashes or visibly diverges; a wrong fill model produces plausible numbers that get trusted for months and then bet on.</p>
   </div>
 
   <div class="tablewrap">
     <table>
-      <thead><tr><th>Stage</th><th>Deliverable</th><th>How you know it works</th></tr></thead>
+      <thead><tr><th>Layer</th><th>Mechanism</th><th>Answers</th></tr></thead>
       <tbody>
-        <tr><td>Reference data</td><td>Daily masters loader, interned <code>InstrumentId</code> covering CM symbol+series and FO symbol+expiry+strike+type</td><td>Same contract resolves to the same identity across days despite token changes.</td></tr>
-        <tr><td>NSE decoder</td><td>All ten message types, both segments, no book yet</td><td>Byte counts reconcile; unknown types skip cleanly via <code>msg_len</code>.</td></tr>
-        <tr><td>Book builder</td><td>Order-by-order book, crossed-tolerant, gap-aware</td><td>Top-5 depth matches NSE&#8217;s official depth broadcast tick for tick.</td></tr>
-        <tr><td>Scheduler</td><td>Priority queue, total ordering, timers, session phases</td><td>Same input replayed twice produces byte-identical output.</td></tr>
-        <tr><td>Cache + dispatch</td><td>Subscriptions, read-only views, staleness state</td><td>A no-op strategy runs a full day; throughput measured.</td></tr>
-        <tr><td>Simulated exchange</td><td>Independent books, latency model, queue position</td><td>A strategy with analytically predictable behaviour fills as predicted.</td></tr>
-        <tr><td>Exec + risk</td><td>Order state machine, positions, limits, kill switch</td><td>Rejects and partial fills drive the state machine correctly.</td></tr>
-        <tr><td>Journal + diff</td><td>Raw packet journaling and replay comparison</td><td>A recorded session replays to an identical decision stream.</td></tr>
-        <tr><td>Live adapters</td><td>NSE multicast receive, A/B, recovery, NNF/CTCL order entry</td><td>Paper session diffs clean against its own replay.</td></tr>
-        <tr><td>Second exchange</td><td>MCX transport + decoder behind the same adapter contract</td><td>The core is not recompiled and no core file changes.</td></tr>
+        <tr><td>1 &mdash; book</td><td>Compare the built book against every arriving <b>snapshot cycle</b>, full depth. <code>Top Of Book 13504</code> as an end-of-session checkpoint only, since it is not disseminated during continuous trading.</td><td>Is my book right?</td></tr>
+        <tr><td>2 &mdash; invariants</td><td><b>Simulated fills at a price must not exceed the volume actually traded there.</b> Plus BOC-rejects-never-fills, fill at or better than limit, queue position never improving, Market-to-Limit residual resting.</td><td>Did the simulator invent liquidity?</td></tr>
+        <tr><td>3 &mdash; scenarios</td><td>Synthetic flow small enough to verify on paper, kept as regression tests. Feasible because phase 1 is a scalar-inventory futures contract.</td><td>Does it behave as specified?</td></tr>
+        <tr><td>4 &mdash; shadow</td><td>Run the simulator in parallel during live trading, same data and same orders, and diff its fills against real fills.</td><td>Does it match <b>reality</b>?</td></tr>
       </tbody>
     </table>
   </div>
 
-  <div class="col">
-    <p>The last row is the real test of this architecture. If adding MCX requires touching anything below the normalizer, the exchange abstraction leaked and is worth fixing before a third venue arrives.</p>
+  <div class="callout">
+    <span class="tagline">First calculation, before any engine work</span>
+    <h3>Is one-tick market making viable at all?</h3>
+    <p>No market-maker fee concession applies, so round-trip cost &mdash; exchange charges, SEBI fees, CTT on the sell leg, GST, stamp duty on the buy leg &mdash; is a hard floor on the quotable spread. Measuring that floor against the historical MCX Crude spread distribution needs no engine, and it either validates the phase-1 premise or redirects it while redirecting is still cheap.</p>
   </div>
 </section>
-
 </div>
 </body></html>

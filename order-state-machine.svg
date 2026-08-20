@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 600" role="img" aria-label="Order state machine: Initialized transitions to Denied on local gate rejection or Submitted when gates pass; Submitted to Rejected or Accepted; Accepted to PartiallyFilled to Filled; Accepted and PartiallyFilled can enter PendingUpdate or PendingCancel; PendingCancel resolves to Canceled or, in a race, to Filled; Accepted can be cancelled unsolicited or expire.">
+<style>
+.bx{fill:#FFFFFF;stroke:#2A46A8;stroke-width:1.8}
+.bxf{fill:#FBF1DE;stroke:#A16207;stroke-width:1.8}
+.bxt{fill:#EAECF2;stroke:#565D78;stroke-width:2.4}
+.ln{stroke:#8E96AE;stroke-width:1.8;fill:none;stroke-linejoin:round;stroke-linecap:round}
+.lnc{stroke:#2A46A8;stroke-width:2;fill:none;stroke-linejoin:round;stroke-linecap:round}
+.lnb{stroke:#A16207;stroke-width:2.2;fill:none;stroke-linejoin:round;stroke-linecap:round}
+.dash{stroke-dasharray:6 4}
+.t{font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px;font-weight:600;fill:#14172A}
+.s{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:10px;fill:#565D78}
+.sb{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:10px;fill:#A16207;font-weight:600}
+.z{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11px;font-weight:600;letter-spacing:.1em;fill:#565D78}
+.m{text-anchor:middle}.e{text-anchor:end}
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8E96AE"/></marker>
+<marker id="ac" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2A46A8"/></marker>
+<marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#A16207"/></marker>
+</defs>
+<rect x="0" y="0" width="1240" height="600" fill="#FFFFFF"/>
+
+<text class="z" x="40" y="32">WORKING</text>
+<text class="z" x="40" y="232">IN FLIGHT</text>
+<text class="z" x="40" y="422">TERMINAL</text>
+
+<rect class="bx" x="40" y="60" width="150" height="56" rx="6"/>
+<text class="t m" x="115" y="84">Initialized</text><text class="s m" x="115" y="102">record created</text>
+
+<rect class="bxf" x="270" y="60" width="150" height="56" rx="6"/>
+<text class="t m" x="345" y="84">Submitted</text><text class="s m" x="345" y="102">in flight to venue</text>
+
+<rect class="bx" x="500" y="60" width="160" height="56" rx="6"/>
+<text class="t m" x="580" y="84">Accepted</text><text class="s m" x="580" y="102">resting in book</text>
+
+<rect class="bx" x="740" y="60" width="180" height="56" rx="6"/>
+<text class="t m" x="830" y="84">PartiallyFilled</text><text class="s m" x="830" y="102">remainder working</text>
+
+<rect class="bxf" x="500" y="240" width="160" height="56" rx="6"/>
+<text class="t m" x="580" y="264">PendingUpdate</text><text class="s m" x="580" y="282">modify in flight</text>
+
+<rect class="bxf" x="740" y="240" width="180" height="56" rx="6"/>
+<text class="t m" x="830" y="264">PendingCancel</text><text class="s m" x="830" y="282">cancel in flight</text>
+
+<rect class="bxt" x="40" y="430" width="150" height="56" rx="6"/>
+<text class="t m" x="115" y="454">Denied</text><text class="s m" x="115" y="472">never left qtrade</text>
+
+<rect class="bxt" x="270" y="430" width="150" height="56" rx="6"/>
+<text class="t m" x="345" y="454">Rejected</text><text class="s m" x="345" y="472">venue said no</text>
+
+<rect class="bxt" x="500" y="430" width="160" height="56" rx="6"/>
+<text class="t m" x="580" y="454">Canceled</text><text class="s m" x="580" y="472">see reason codes</text>
+
+<rect class="bxt" x="740" y="430" width="150" height="56" rx="6"/>
+<text class="t m" x="815" y="454">Expired</text><text class="s m" x="815" y="472">EOD · GTD</text>
+
+<rect class="bxt" x="960" y="430" width="150" height="56" rx="6"/>
+<text class="t m" x="1035" y="454">Filled</text><text class="s m" x="1035" y="472">complete</text>
+
+<line class="lnc" x1="190" y1="88" x2="266" y2="88" marker-end="url(#ac)"/>
+<text class="s m" x="228" y="80">gates pass</text>
+
+<line class="ln" x1="115" y1="118" x2="115" y2="426" marker-end="url(#a)"/>
+<text class="s" x="124" y="270">local gate reject</text>
+<text class="s" x="124" y="286">(synchronous)</text>
+
+<line class="lnc" x1="420" y1="88" x2="496" y2="88" marker-end="url(#ac)"/>
+<text class="s m" x="458" y="80">venue ack</text>
+
+<line class="ln" x1="345" y1="118" x2="345" y2="426" marker-end="url(#a)"/>
+<text class="s" x="354" y="270">venue reject</text>
+<text class="s" x="354" y="286">BOC would cross</text>
+
+<line class="lnc" x1="660" y1="88" x2="736" y2="88" marker-end="url(#ac)"/>
+<text class="s m" x="698" y="80">fill</text>
+
+<polyline class="lnc" points="880,118 880,180 1000,180 1000,426" marker-end="url(#ac)"/>
+<text class="s" x="890" y="200">fully filled</text>
+
+<line class="ln" x1="545" y1="118" x2="545" y2="236" marker-end="url(#a)"/>
+<text class="s e" x="538" y="182">modify</text>
+<line class="ln" x1="615" y1="236" x2="615" y2="118" marker-end="url(#a)"/>
+<text class="s" x="622" y="182">ack / reject</text>
+
+<polyline class="ln" points="660,104 700,104 700,268 736,268" marker-end="url(#a)"/>
+<line class="ln" x1="830" y1="118" x2="830" y2="236" marker-end="url(#a)"/>
+<text class="s m" x="830" y="182">cancel</text>
+
+<polyline class="ln" points="790,298 790,350 580,350 580,426" marker-end="url(#a)"/>
+<text class="s m" x="700" y="342">cancel confirmed</text>
+
+<polyline class="lnb" points="920,278 1150,278 1150,390 1070,390 1070,426" marker-end="url(#ab)"/>
+<text class="sb" x="960" y="270">RACE — filled before cancel arrived</text>
+
+<polyline class="ln dash" points="500,100 460,100 460,458 496,458" marker-end="url(#a)"/>
+<text class="s" x="300" y="404">unsolicited: MMP · watchdog · mass-cancel · session loss</text>
+
+<polyline class="ln dash" points="660,72 690,72 690,40 1190,40 1190,530 815,530 815,490" marker-end="url(#a)"/>
+<text class="s e" x="1180" y="558">end of day (Lean) · GTD reached</text>
+
+<text class="s" x="40" y="580">solid = normal path   ·   dashed = venue-initiated, unsolicited   ·   amber = in flight   ·   grey = terminal</text>
+</svg>
