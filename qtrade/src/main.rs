@@ -1,7 +1,8 @@
-//! CLI entry point. All decoding logic lives in `decoder` (one component,
-//! one file: src/decoder.rs) — this file only parses arguments and prints
-//! the final summary. See README.md for what the decoder validated.
+//! CLI entry point. All decoding logic lives in the `decoder` component
+//! (src/decoder/decoder.rs, docs in src/decoder/user_doc.md) — this file
+//! only parses arguments and prints the final summary.
 
+#[path = "decoder/decoder.rs"]
 mod decoder;
 
 use std::env;
