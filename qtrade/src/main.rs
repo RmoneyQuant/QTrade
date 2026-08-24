@@ -5,6 +5,34 @@
 #[path = "decoder/decoder.rs"]
 mod decoder;
 
+#[allow(dead_code)]
+#[path = "types/types.rs"]
+mod types;
+
+#[allow(dead_code)]
+#[path = "scheduler/scheduler.rs"]
+mod scheduler;
+
+#[allow(dead_code)]
+#[path = "refdata/refdata.rs"]
+mod refdata;
+
+#[allow(dead_code)]
+#[path = "book/book.rs"]
+mod book;
+
+#[allow(dead_code)]
+#[path = "cache/cache.rs"]
+mod cache;
+
+#[allow(dead_code)]
+#[path = "simulator/simulator.rs"]
+mod simulator;
+
+#[allow(dead_code)]
+#[path = "execution/execution.rs"]
+mod execution;
+
 use std::env;
 use std::fs;
 use std::process::ExitCode;

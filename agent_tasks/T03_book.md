@@ -14,6 +14,7 @@ One order book per instrument, built incrementally from `decoder`'s message stre
 
 - [../BACKTEST-PHASE1.md](../BACKTEST-PHASE1.md) §M3 in full — FR-B08 (construction, trait shape given verbatim), FR-B09 (crossed books are legal — do not assert against them), FR-B10 (state machine), **FR-B11 (snapshot-cycle validation — the actual gate, not a formality)**
 - [../ARCHITECTURE-DECISIONS.md](../ARCHITECTURE-DECISIONS.md) D06 (one shared book per instrument) and D31 Layer 1 (why the snapshot channel, not `TopOfBook`/`13504`, is the validation source — `13504` is post-trading-only, already confirmed and reflected in `decoder`)
+- [../ARCHITECTURE.md](../ARCHITECTURE.md) §4.8 (BookBuilder — the multi-instrument owner this brief now includes below; don't skip this, the earlier version of this task omitted it)
 - `qtrade/src/decoder/user_doc.md` — the message-type table and price/qty scaling are your input contract; don't re-derive them
 - `../references/MCX_Feeder.cpp` — the modify-handling section (~line 484 on) for the **business rules** only (exactly when priority is lost vs retained, how mass-delete interacts with resting orders). **Do not port its data structure** — the nested price-bucket scheme is a legacy design; FR-B08 already specifies a simpler dense array, which is the right call now that MCX's circuit limits bound the price range
 
@@ -34,6 +35,21 @@ pub trait MboBook: Book {
 ```
 
 One implementation, `MboBookImpl`, dense array indexed by tick offset over the day's price band (from `refdata`'s `Instrument.tick_size`/DPR bounds once T01 lands — coordinate if building in parallel, or stub the range for now). Each level: a FIFO of resting order slots plus aggregate qty/count.
+
+**Also build a `BookBuilder`** — the piece ARCHITECTURE.md §4.8 actually names, and the thing that's currently missing from this brief. It owns a `HashMap<InstrumentId, MboBookImpl>` for whatever instrument set it's constructed with, and exposes:
+
+```rust
+pub struct BookBuilder { /* one MboBookImpl per instrument */ }
+impl BookBuilder {
+    pub fn new(instruments: &[InstrumentId]) -> Self;
+    pub fn apply(&mut self, event: &DecodedMessage);      // routes to the right book by instrument
+    pub fn get(&self, id: InstrumentId) -> Option<&dyn Book>;
+}
+```
+
+This is what `cache` (T05) and `simulator` (T06) actually construct and call into — neither of them owns per-instrument book storage themselves; they hold or drive a `BookBuilder`. Without this type, T05/T06 have no defined entry point.
+
+**Instrument scope for this milestone, specifically:** there is no filter yet — that's M5 (`cache`, T05). Do **not** construct a `BookBuilder` covering every product in the recording; that's exactly the runtime cost D32/FR-B16 exist to avoid, and it's premature here regardless. Construct it explicitly with a small, hand-picked instrument set for testing — CRUDEOIL and NATURALGAS's tokens, resolved once by hand or via a throwaway `refdata` lookup, not derived from a real strategy predicate (that machinery doesn't exist until T05).
 
 **FR-B09 is not optional:** `best_bid >= best_ask` is a normal transient state on an order-by-order feed (an aggressive order publishes before the trade it causes). A panic or assert on a crossed book is a bug in `book`, not in the data.
 
@@ -65,6 +81,7 @@ Full-depth book-vs-snapshot comparison, zero divergences, across a full real ses
 ## Done when
 
 - [ ] `MboBook` built from `decoder`'s message stream, dense tick-indexed, tolerates crossed state
+- [ ] `BookBuilder` exists — owns the per-instrument map, exposes `apply()` and `get()`, constructed with an explicit small instrument set (not the whole file)
 - [ ] Book state machine implemented (`Uninit`/`Ok` minimum)
 - [ ] Snapshot-cycle comparison harness run against a real session, zero divergences (or a precise, investigated account of what diverged)
 - [ ] `book_user_doc.md` written — same depth as `decoder`'s: how it works, which files it reads, what the snapshot validation actually checks and why it's the real gate

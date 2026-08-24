@@ -2,7 +2,7 @@
 
 **Folder:** `qtrade/src/types/` → `types.rs` + `types_user_doc.md`
 **Depends on:** nothing
-**Blocks:** `refdata` (T01), `book` (T03) — both need these types before they can compile
+**Blocks:** `refdata` (T01) and `book` (T03) directly; `simulator` (T06) transitively, via `Venue` (its `LatencyModel` trait is keyed per-venue) and `book`'s `OrderHandle`
 
 ---
 
@@ -28,9 +28,20 @@ pub enum Side { Buy, Sell }
 pub struct InstrumentId(pub u32);      // interned, dense — FR-B02
 pub enum Venue { Mcx }                  // #[non_exhaustive] — more venues later, not now
 
+// Supporting types InstrumentKind/Instrument reference below. Kept deliberately
+// simple — these are data carriers, not behavior:
+pub struct Date(pub i64);               // days-since-epoch; widen only if a real need appears
+pub struct YearMonth { pub year: i32, pub month: u8 }
+pub enum Settlement { Cash, Physical }
+pub enum Right { Call, Put }
+pub enum Exercise { European, American }
+pub enum Currency { Inr }
+
 pub enum InstrumentKind {                // D37 — Future implemented, rest are stubs
     Future { underlying: String, expiry: Date, contract_month: YearMonth, settlement: Settlement },
-    Option { .. },  Equity { .. },  Spread { leg1: InstrumentId, leg2: InstrumentId },
+    Option { underlying: String, expiry: Date, strike: Price, right: Right, exercise: Exercise, settlement: Settlement },
+    Equity { series: String },
+    Spread { leg1: InstrumentId, leg2: InstrumentId },
 }
 
 pub struct Instrument {                  // FR-B01, verbatim shape from BACKTEST-PHASE1.md
@@ -44,6 +55,10 @@ pub enum BookState { Uninit, Recovering, Ok, Stale }   // FR-B10, verbatim
 pub struct OrderHandle {                 // FR-B05 — MCX has no broadcast order id
     pub instrument: InstrumentId, pub side: Side, pub price: Price, pub priority_ts: u64,
 }
+
+// Used by `book`'s Book trait (best_bid/best_ask/depth) — BACKTEST-PHASE1.md's own
+// FR-B08 code uses this type but never defines it. Defined here since nothing else does.
+pub struct PriceLevel { pub price: Price, pub qty: Qty, pub order_count: u32 }
 ```
 
 Give every type here `#[derive(Debug, Clone, Copy, PartialEq, Eq)]` where it fits (matches the Debug/Display convention already established in `decoder`) — `Debug` always, `Display` only where a human reads it directly (probably `Price`/`Qty`/`Side`, same as `decoder` already does).

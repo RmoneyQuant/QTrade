@@ -6,3 +6,58 @@ edition = "2021"
 [[bin]]
 name = "mcx-decoder"
 path = "src/main.rs"
+
+# T03 (`book`)'s own FR-B11 validation harness -- not wired into the main
+# CLI (main.rs is intentionally left untouched this round; see
+# src/book/validate.rs's header comment for why this second [[bin]] is
+# the only way to compile/run/test book.rs without touching it, since
+# this crate has no [lib] target). Safe to remove once `book` is wired
+# into main.rs and this validation is folded into a normal integration
+# test.
+[[bin]]
+name = "book-validate"
+path = "src/book/validate.rs"
+
+# T05 (`cache`)'s own acceptance harness -- same reason as book-validate
+# above (no [lib] target, main.rs intentionally untouched this round):
+# a no-op strategy running decoder -> filter -> book -> cache -> dispatch
+# against a full real session, per BACKTEST-PHASE1.md §M5's acceptance
+# bar. Safe to remove once `cache` is wired into main.rs for real and
+# this validation is folded into a normal integration test.
+[[bin]]
+name = "cache-validate"
+path = "src/cache/validate.rs"
+
+# T06 (`simulator`)'s own acceptance harness -- same reason as
+# book-validate/cache-validate above (no [lib] target, main.rs
+# intentionally untouched this round): the hand-verified fill trace plus
+# the full FR-B24 invariant sweep against a real session, per
+# BACKTEST-PHASE1.md §M6's acceptance bar. Deliberately independent of
+# `cache`/`book` (D10) -- declares only `types`/`decoder`/`simulator`.
+# Safe to remove once `simulator` is wired into main.rs for real and this
+# validation is folded into a normal integration test.
+[[bin]]
+name = "simulator-validate"
+path = "src/simulator/validate.rs"
+
+# T07 (`execution`)'s own acceptance harness -- same reason as
+# book-validate/cache-validate/simulator-validate above (no [lib] target,
+# main.rs intentionally untouched this round): runs the M7 acceptance
+# scenarios (PendingCancel -> Filled race, local-gate denial never
+# reaching the venue, cost-model asymmetry, Tier 1 report with run
+# identity) against real dependencies and prints results. Declares
+# types/decoder/scheduler/book/refdata/cache/simulator/execution, per
+# execution.rs's own module list. Safe to remove once `execution` is
+# wired into main.rs for real and this validation is folded into a
+# normal integration test.
+[[bin]]
+name = "execution-validate"
+path = "src/execution/validate.rs"
+
+# A minimal demo strategy (not a real Strategy trait -- none exists yet,
+# see execution.rs/T07's own scope notes) proving the read-side pipeline
+# -- decoder -> cache (filter -> book -> dispatch) -- works end to end
+# against real MCX data. See dummy_strategy/dummy_strategy.md.
+[[bin]]
+name = "dummy-strategy"
+path = "src/dummy_strategy/dummy_strategy.rs"

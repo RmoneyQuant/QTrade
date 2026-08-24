@@ -107,6 +107,10 @@ Each packet's payload is itself a sequence of individual EOBI messages, back to 
 | `13104` / `13105` | `Trade` (`full: bool`) | A trade — full or partial execution against a resting order. |
 | `13202` | `ExecutionSummary` | The aggregate view of a match event. |
 | `13504` | `TopOfBook` | Best bid/ask snapshot (only published post-trading per the spec, not during continuous trading). |
+| `13600` | `SnapshotProductSummary` | Opens a periodic full-book snapshot cycle (see `book_user_doc.md` §5). |
+| `13601` | `SnapshotInstrumentSummary` | Opens one instrument's block within a snapshot cycle. |
+| `13602` | `SnapshotOrder` | One resting order line within a snapshot cycle (real wire size 40 bytes, not 48 — see `book_user_doc.md` §5.1). |
+| `13603` | `InstrumentInfo` | An instrument's daily price range (circuit limit) — `UpperDailyPriceLimit`/`LowerDailyPriceLimit`. **A real MCX-reference-material discrepancy, resolved against actual bytes, not assumed:** both `references/MCX_Feeder.h`'s own comment and the EOBI spec's own field-table description line say this message's template id is `13203` — checked against real capture bytes and found wrong; `13203` never appears anywhere in the real files, `13603` does, decoding to values that match already-independently-documented real DPR bounds exactly. See `InstrumentInfo`'s doc comment in `decoder.rs` and `book_user_doc.md`'s "generic price band" section (this is `book`'s real, generic price-band mechanism now, not just reference data). |
 
 **Everything else — notably `13300`/`13301` (product/instrument state changes) — decodes as `UnknownMessage` and is safely skipped using `body_len`.** This isn't a bug: `references/MCX_Feeder.h` doesn't define their byte layout, so rather than guess at field offsets and silently misparse them, they're left unread. `decode_message()` in `decoder.rs` is the dispatch table — every `template_id` not listed above falls through to the `_ =>` case.
 

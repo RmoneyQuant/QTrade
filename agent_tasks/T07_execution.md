@@ -1,7 +1,7 @@
 # T07 — `execution`
 
 **Folder:** `qtrade/src/execution/` → `execution.rs` + `execution_user_doc.md`
-**Depends on:** `types` (T00), `cache` (T05), `simulator` (T06)
+**Depends on:** `types` (T00), `cache` (T05), `simulator` (T06), `scheduler` (T04 — venue rejections arrive as scheduled events, see Build point 2)
 **Milestone:** M7 — Execution, accounting and reporting. The last milestone in BACKTEST-PHASE1.md's build order — completing this satisfies the phase-1 definition of done.
 
 ---
@@ -13,7 +13,7 @@ Order lifecycle, two-level accounting, transaction costs, and the run's output �
 ## Required reading
 
 - [../BACKTEST-PHASE1.md](../BACKTEST-PHASE1.md) §M7 in full — FR-B26 through FR-B31
-- [../ARCHITECTURE-DECISIONS.md](../ARCHITECTURE-DECISIONS.md) D34 (RMS is a trait, phase-1 impl always says yes — same swappable-trait pattern as `LatencyModel` in T06), D36 (local gate rejections are synchronous; venue rejections arrive as events — genuinely different, not two flavours of one), D08 (two-level accounting: per-strategy sub-account + firm aggregate), D23 (Cost Model — direction-asymmetric, CTT on sell side/stamp duty on buy side, no fee concession so round-trip cost is a hard floor on quotable spread), D40 (client order ID: injected session id + monotonic counter — **not** wall-clock, or two identical backtest runs produce different IDs and break determinism)
+- [../ARCHITECTURE-DECISIONS.md](../ARCHITECTURE-DECISIONS.md) D34 (RMS is a trait, phase-1 impl always says yes — same swappable-trait pattern as `LatencyModel` in T06), D36 (local gate rejections are synchronous; venue rejections arrive as events — genuinely different, not two flavours of one), D08 (two-level accounting: per-strategy sub-account + firm aggregate), D23 (Cost Model — direction-asymmetric, CTT on sell side/stamp duty on buy side, no fee concession so round-trip cost is a hard floor on quotable spread), D40 (client order ID: injected session id + monotonic counter — **not** wall-clock, or two identical backtest runs produce different IDs and break determinism), D26 (reporting — two tiers plus strategy-published series, referenced in Build point 6)
 - [../STRATEGY-GUIDE.md](../STRATEGY-GUIDE.md) §7a — the eleven order states and their transition table, including the two easy-to-miss ones: `PendingCancel → Filled` is a real race, not an edge case; `Denied` (local gate, never left qtrade) is distinct from `Rejected` (venue refused it)
 
 ## Build

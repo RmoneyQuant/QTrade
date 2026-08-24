@@ -31,7 +31,7 @@ Loads MCX's daily contract file (`MCXScrips.bcp`) into `types::Instrument` recor
 | DPR bounds | `parts[64]` / `parts[65]` | **Correction found during the decoder pilot:** for CRUDEOILM these came out as small values (`4`/`4`), which look like a **percentage circuit band**, not an absolute rupee range as the field names imply. Verify this against a few real rows before trusting either interpretation — don't assume the C++'s naming is accurate, it's already been wrong once this project (see `decoder`'s user doc, price scaling) |
 | ExpiryDate | `parts[54]`, minus `19800` if `>0` else `0` | IST-offset correction in seconds; sanity-check against a real file |
 | Symbol | `parts[6]`, spaces stripped | |
-| InstrumentType | `parts[53]`, substring to first space | The mapping function (`String_To_Instrument_Type`) isn't in the files we have — inspect real `CRUDEOIL`/`NATURALGAS` rows and confirm the exact string (likely `FUTCOM`) before hardcoding the match. Only `Future` matters this round |
+| InstrumentType | `parts[53]`, substring to first space | The mapping function (`String_To_Instrument_Type`) isn't in the files we have, but this is already confirmed empirically: real CRUDEOILM rows carry `FUTCOM`. Match on that string directly — no need to re-derive it. Only `Future` matters this round |
 
 ## Build
 
