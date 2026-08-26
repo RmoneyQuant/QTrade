@@ -258,9 +258,50 @@ instant it's recorded, even though the *value* genuinely cannot yet
 asserts both horizon slots exist and are `None` immediately after the
 fill, before either is ever observed).
 
-**Tier 3 — deferred.** Strategy-published series need a real `Strategy`
-trait to publish from; none exists yet (out of scope, same as this
-task's brief states).
+**Tier 3 — deferred.** Strategy-published series need `ctx.publish(...)`,
+which doesn't exist on `strategy::Ctx` yet (out of scope, same as this
+task's brief states) — a different gap from live fill/order-event
+delivery, which is real now (see §6.1).
+
+### 6.1 `ExecOutcome` — live delivery, not just end-of-run reporting (2026-08-25)
+
+Until this pass, `fills()`/`order_events()` were read-only accessors a
+caller queried once, after a run finished — the data existed live
+(pushed the instant `handle_exec_reports`/`log_event` decide something
+happened) but nothing was *notified*. `control_dispatcher` needed a way
+to receive "what just happened," so each mutating method that can
+produce a fill or order-event (`submit_order`, `on_market_event`,
+`request_cancel`, `deliver_cancel_to_venue`, `request_modify`,
+`deliver_modify_to_venue`, `mark_expired`) now returns an `ExecOutcome`
+alongside its original result:
+
+```rust
+pub struct ExecOutcome { pub fills: Vec<FillRecord>, pub order_events: Vec<OrderEventRecord> }
+
+pub fn submit_order(&mut self, intent: NewOrderIntent, now_ns: u64) -> (GateOutcome, ExecOutcome) {
+    let (fills_before, events_before) = (self.fills.len(), self.order_events.len());
+    let outcome = self.submit_order_inner(intent, now_ns);   // original body, renamed, unchanged
+    (outcome, ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() })
+}
+```
+
+Every one of the seven methods follows this exact shape: snapshot
+`self.fills`/`self.order_events`' lengths, call the renamed `..._inner`
+(the pre-existing, unchanged logic), slice off whatever got added.
+`handle_exec_reports`/`on_fill`/`log_event`/`deny` themselves are
+**untouched** — this is a thin wrapper at the public boundary, not a new
+accounting path, and every one of this file's existing tests still
+passes with only mechanical call-site updates (`eng.submit_order(...)`
+returning a tuple now, ~35 call sites here, ~14 more in
+`execution-validate`).
+
+**A real, discussed alternative was not taken:** `main.rs` could instead
+diff `engine.fills()`/`engine.order_events()`'s lengths itself, before
+and after calling `on_market_event`, with zero changes to this file at
+all. Both options deliver identically to a strategy through
+`control_dispatcher` — the choice here was for `ExecutionEngine` itself
+to be the source of truth for "what did this call just produce," at the
+accepted cost of the ~50 call-site updates above.
 
 ## 7. The queue-position bug: found, root-caused, fixed
 
@@ -476,16 +517,15 @@ transitively) — 36 total, all passing.
 
 ## 10. What this component deliberately does not do
 
+**Historical list, from this component's original M7 build — two items below are now out of date, corrected inline rather than rewritten:**
+
 - No margin or cash checks — a later, real `Rms` implementation's job
   (D34's own explicit deferral); `AlwaysAllowRms` exists so the call site
   is real today.
-- No `Strategy` trait / strategy-authoring API — this task closes out
-  M7's machinery only; a real strategy to drive it through is separate
-  follow-on work once M1–M7 all exist.
+- ~~No `Strategy` trait / strategy-authoring API~~ — **partially superseded, 2026-08-25**: `event_dispatcher::MarketHandler` and `control_dispatcher::ControlHandler` are real now (see §6.1 and each component's own doc). Still no `ctx.submit()`/`ctx.cancel()` on `strategy::Ctx` — a strategy can *receive* fills/order-updates live, but still can't *cause* one through the `Ctx` handle; that remains separate follow-on work.
 - No Tier 3 (strategy-published series) — nothing exists yet to publish
   from.
-- No `main.rs` wiring — deliberately left for a separate pass, same as
-  every other component's own validation binary.
+- ~~No `main.rs` wiring~~ — **superseded, 2026-08-25**: `main.rs` is the one real entry point now (see `main_user_doc.md`); this component's own validation binary (`execution-validate`) remains, for the same reason `book-validate`/`cache-validate`/`simulator-validate` still do.
 - No real build-hash/config-file infrastructure (D22) — `BUILD_HASH` is
   a hardcoded literal and `RunConfig::hash()` is a `Debug`-formatted
   `DefaultHasher` hash, both explicitly permitted as placeholders by this

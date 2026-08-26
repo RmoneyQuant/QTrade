@@ -1,14 +1,16 @@
 # Cache — component documentation
 
-**What this component does, in one sentence:** the strategy-declared instrument filter that runs immediately after `decoder` (FR-B16), the shared read model every strategy sees (FR-B17), and the depth-scoped wake mechanism that tells a strategy when to look, not what it's allowed to see (FR-B18).
+**What this component does, in one sentence:** the strategy-declared instrument filter that runs immediately after `decoder` (FR-B16), and the shared read model every strategy sees (FR-B17).
 
-Code: [`cache.rs`](cache.rs) (this folder). Not yet wired into `main.rs` — another agent owns that file for a concurrent change (T05's brief). Verified standalone the same way `book` was: a second `[[bin]]` target, `cache-validate` (`validate.rs`, this folder) — see §5.
+**Dispatch (FR-B18/D25) moved out (2026-08-25).** It used to be a third piece bundled in here (§4/§5 below describe that era and its real, measured numbers — kept as history, not deleted, since the measurements are still true statements about that code). A dedicated design session concluded market-data dispatch was never really this component's job, just built here first because there was nowhere else for it to live — D33 ("two dispatchers, because they are two different lookups") makes the case explicitly. It's now `event_dispatcher::EventDispatcher`, generalized with a real strategy-facing trait (`MarketHandler`) and a second callback (`on_trade`). See `event_dispatcher/event_dispatcher_user_doc.md`. `Cache` no longer knows dispatch exists at all — the same independence `ExecutionEngine`/`Portfolio` already have.
+
+Code: [`cache.rs`](cache.rs) (this folder). Verified standalone the same way `book` was: a second `[[bin]]` target, `cache-validate` (`validate.rs`, this folder) — see §5.
 
 ---
 
 ## 1. What it builds
 
-Three pieces, matching BACKTEST-PHASE1.md §M5 exactly:
+Two pieces now (was three — see the Dispatch note above), matching BACKTEST-PHASE1.md §M5 minus the part that moved:
 
 ```rust
 pub struct InstrumentFilter { /* resolved native-SecurityID set */ }
@@ -19,26 +21,20 @@ impl InstrumentFilter {
     pub fn instrument_ids(&self) -> Vec<InstrumentId>;
 }
 
-pub enum Depth { Bbo, Top(u8) }
-pub trait Subscriber { fn on_wake(&mut self, instrument: InstrumentId, depth: Depth); }
-
-pub struct Cache { /* filter, BookBuilder, InstrumentMaster, own-orders stub, Dispatcher */ }
+pub struct Cache { /* filter, BookBuilder, InstrumentMaster, own-orders stub */ }
 impl Cache {
     pub fn new(refdata: InstrumentMaster, filter: InstrumentFilter) -> Self;
     pub fn apply(&mut self, event: &DecodedMessage) -> Option<InstrumentId>;   // filter -> book
-    pub fn dispatch(&mut self, instrument: InstrumentId);                     // wake check
-    pub fn on_message(&mut self, event: &DecodedMessage);                     // both, in order
-    pub fn subscribe(&mut self, instrument: InstrumentId, depth: Depth, s: Box<dyn Subscriber>) -> SubscriberId;
     pub fn seed_book_band(&mut self, instrument: InstrumentId, band_min_raw: i64, band_max_raw: i64); // see book_user_doc.md
     pub fn book(&self, instrument: InstrumentId) -> Option<&dyn Book>;        // full access, always
     pub fn book_state(&self, instrument: InstrumentId) -> Option<BookState>;
     pub fn refdata(&self) -> &InstrumentMaster;
     pub fn own_orders(&self) -> &OwnOrdersAndPositions;                       // stub, read-only
-    pub fn dispatch_stats(&self) -> DispatchStats;
+    pub fn filter(&self) -> &InstrumentFilter;
 }
 ```
 
-`Cache::on_message` is the one call a scheduler-driven loop makes per decoded message: filter, then (if it passes) book work, then the depth-scoped wake check — exactly the `decoder -> filter -> book -> cache -> dispatch` pipeline the task brief names. `apply`/`dispatch` are exposed separately too, purely so a caller (or this component's own acceptance harness, see §5) can measure or batch each stage independently.
+`Cache::apply` is the one call a caller makes per decoded message: filter, then (if it passes) book work. It returns the touched `InstrumentId` so a caller (`main.rs`, today) can decide whether to also drive `event_dispatcher::EventDispatcher::on_book_touched` — `Cache` itself no longer combines the two steps (there used to be an `on_message` that did; it went with `Dispatcher`).
 
 ---
 
@@ -104,11 +100,13 @@ Holds, of what this task set has a real shape for:
 
 **Two id spaces, on purpose, not by accident.** `book`'s `BookBuilder` (for this milestone, per its own doc comment) keys books by `InstrumentId(native_SecurityID as u32)` directly — `refdata`'s dense per-day interning (FR-B02) isn't wired into `book` yet. `Cache` follows the same convention rather than inventing a third scheme: `InstrumentFilter::instrument_ids()` hands `BookBuilder::new` native-token-derived ids, while `Cache::refdata().get(dense_id)` is the separate path for resolving a full `Instrument` record by refdata's own dense id when a caller actually needs a metadata field (tick size, lot size, expiry, ...). Two different jobs, two different keys — same shape `refdata_user_doc.md` already documents for its own callers.
 
-**Read-only to strategies.** Every `Cache` accessor returns either a shared reference (`&dyn Book`, `&InstrumentMaster`, `&OwnOrdersAndPositions`) or a `Copy` value (`BookState`, `DispatchStats`). The only methods that mutate anything (`apply`, `dispatch`, `on_message`, `subscribe`) are what the filter → book → dispatch pipeline itself calls — standing in for what `BookBuilder` (book work, already `book`'s job) and a future `ExecutionEngine` (order/position work, T07's job) actually write, per FR-B17's own division of labor.
+**Read-only to strategies.** Every `Cache` accessor returns either a shared reference (`&dyn Book`, `&InstrumentMaster`, `&OwnOrdersAndPositions`) or a `Copy` value (`BookState`). The only method that mutates anything (`apply`) is what the filter → book pipeline itself calls — standing in for what `BookBuilder` (book work, already `book`'s job) and a future `ExecutionEngine` (order/position work, T07's job) actually write, per FR-B17's own division of labor.
 
 ---
 
-## 4. Dispatch — FR-B18 / D25: waking vs access, concretely
+## 4. Dispatch — FR-B18 / D25: waking vs access, concretely (historical — moved to `event_dispatcher`, 2026-08-25)
+
+**This section describes `cache::Dispatcher`, which no longer exists in this file.** Kept as-is below because every number and claim in it is still a true statement about a real run of that code — it's the record of how `event_dispatcher::EventDispatcher` (its direct successor, same keying and snapshot-diffing logic, unchanged) was proven correct before the relocation. See `event_dispatcher/event_dispatcher_user_doc.md` for the current, real component and its own tests.
 
 Subscriber lists keyed by **`(instrument, depth)`** — `Depth::Bbo` or `Depth::Top(n)`. What "waking, not access" means in this code, exactly:
 
@@ -182,13 +180,13 @@ The record/message counts match `book`'s own FR-B11 run exactly (56,602,508 / 24
 
 ## 6. Unit tests
 
-`cache.rs`'s own `#[cfg(test)] mod tests` (run via `cargo test --release --bin cache-validate`, the only binary target that currently compiles `cache.rs` — see §5.1) covers: the filter admitting a matching underlying and rejecting an unrelated one (including the mini-contract near-miss `"CRUDEOILM"` vs `"CRUDEOIL"`), the roll-trap scenario end to end (a not-yet-subscribed contract's book already has full history), an unfiltered instrument never reaching `BookBuilder` at all, a BBO subscriber waking on a real top-of-book change but not on a strictly-deeper-level-only addition, an `OrderModify` that moves the best ask waking exactly once, and `DispatchStats` counting book-touches and wakes-fired as two separate, independently verifiable numbers. All pass (23 total, including `book.rs`'s and `refdata.rs`'s own suites compiled into the same binary).
+`cache.rs`'s own `#[cfg(test)] mod tests` (run via `cargo test --release --bin cache-validate`, the only binary target that currently compiles `cache.rs` — see §5.1) covers: the filter admitting a matching underlying and rejecting an unrelated one (including the mini-contract near-miss `"CRUDEOILM"` vs `"CRUDEOIL"`), the roll-trap scenario end to end (a not-yet-subscribed contract's book already has full history), and an unfiltered instrument never reaching `BookBuilder` at all. **The dispatch tests (BBO waking on a real change but not a deeper-level-only one, a moving-ask `OrderModify` waking exactly once, `DispatchStats`/now `EventDispatcherStats` counting touches and wakes separately) moved to `event_dispatcher::tests` (2026-08-25)** — same assertions, same synthetic data, now constructing `EventDispatcher` directly instead of going through `Cache`. All pass.
 
 ---
 
 ## 7. Scope notes
 
-- The `Strategy` trait itself (D24: `on_start`/`on_book`/`on_trade`/...) is later work. `Subscriber` here is a deliberately thin stand-in — just enough surface for a no-op strategy to prove the dispatch shape end to end, and realistic enough for a scheduler-driven loop to call into (a vtable call through `Box<dyn Subscriber>`, the same cost shape D24 documents for `dyn Strategy`).
+- The `Strategy` trait itself (D24: `on_start`/`on_book`/`on_trade`/...) has real, if still thin, pieces now — `event_dispatcher::MarketHandler`, `strategy::Ctx`/`StartCtx` — built 2026-08-25. `ExecutionEngine` delivering fills/order-updates live (`ControlHandler`, Phase B) is still later work.
 - No read or write path for the Simulated Exchange (T06) — D32/FR-B19 are explicit that it has no read path into `Cache` at all; nothing here assumes otherwise.
 - `OwnOrdersAndPositions` carries no fields and no mutation methods. Real content and a real writer arrive with `execution` (T07).
 - Confirmed: nothing under `/mnt/` or `references/` was modified by this task. `book.rs`, `decoder.rs`, `refdata.rs`, `types.rs`, `scheduler.rs`, and `main.rs` were read but not edited — everything for this component lives in `qtrade/src/cache/`.

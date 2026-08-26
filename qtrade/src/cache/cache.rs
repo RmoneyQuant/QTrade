@@ -11,19 +11,22 @@
 //!   state, the day's reference data, and a stub slot for a strategy's
 //!   own orders/positions that `execution` (T07, not built yet) will
 //!   write into later.
-//! - **Dispatch** (FR-B18 / D25): subscriber lists keyed by
-//!   `(instrument, depth)`. A strategy subscribed at BBO wakes only when
-//!   the best bid/ask actually changes value, never on a deeper-level-
-//!   only change -- but full book access is never gated by subscription
-//!   depth; `Cache::book` reaches any depth on demand regardless of what
-//!   a strategy is "subscribed" at. Subscription governs *waking*, not
-//!   *access*.
+//!
+//! **Dispatch (FR-B18/D25) used to be a third thing bundled in here --
+//! it has moved to `event_dispatcher::EventDispatcher`.** Relocated,
+//! generalized, and given a real strategy-facing trait
+//! (`MarketHandler`) in a dedicated design session (see
+//! `event_dispatcher_user_doc.md`): D33 ("two dispatchers, because they
+//! are two different lookups") makes clear market-data dispatch was
+//! never really part of *this* component's job, just built here first
+//! because there was nowhere else for it to live yet. `Cache` no longer
+//! knows dispatch exists at all -- same independence `ExecutionEngine`/
+//! `Portfolio` already have ("accounting reacts to prices it's handed,
+//! it does not go looking for them").
 //!
 //! See `cache_user_doc.md` in this folder for the full account: why the
 //! filter predicate is symbol/underlying-based rather than a fixed
-//! instrument-id list (the "roll trap", D32), what "waking vs access"
-//! means concretely, and the real throughput/allocation numbers from a
-//! full real-session acceptance run.
+//! instrument-id list (the "roll trap", D32).
 //!
 //! ## Convention carried over from `decoder`/`book`/`scheduler`
 //!
@@ -33,18 +36,17 @@
 //!
 //! ## Scope (deliberately out, this milestone)
 //!
-//! The `Strategy` trait itself (later work -- `Subscriber` below is a
-//! deliberately thin stand-in, just enough to prove the dispatch shape
-//! works end to end). Simulated Exchange (T06, separate component,
-//! explicitly has no read path into this cache per D32/FR-B19). Real
-//! writes into the own-orders/positions stub (T07, `execution`, doesn't
-//! exist yet) -- `cache` only holds the slot.
+//! The `Strategy` trait itself (later work -- see `strategy::Ctx`/
+//! `StartCtx` and `event_dispatcher::MarketHandler` for how far that's
+//! come). Simulated Exchange (T06, separate component, explicitly has
+//! no read path into this cache per D32/FR-B19). Real writes into the
+//! own-orders/positions stub (T07, `execution`, doesn't exist yet) --
+//! `cache` only holds the slot.
 
 use crate::book::{Book, BookBuilder};
 use crate::decoder::DecodedMessage;
 use crate::refdata::InstrumentMaster;
-use crate::types::{BookState, Instrument, InstrumentId, PriceLevel};
-use std::collections::HashMap;
+use crate::types::{BookState, Instrument, InstrumentId};
 use std::collections::HashSet;
 
 // ---------------------------------------------------------------------
@@ -158,170 +160,6 @@ fn security_id_of(event: &DecodedMessage) -> Option<i64> {
 }
 
 // ---------------------------------------------------------------------
-// Dispatch -- FR-B18 / D25. Depth-scoped subscriber lists; waking, not
-// access.
-// ---------------------------------------------------------------------
-
-/// What a subscription wakes on. `Bbo` is the zero-allocation path this
-/// component's acceptance run actually exercises (`best_bid`/`best_ask`
-/// return `Option<PriceLevel>` by value, no heap involved). `Top(n)`
-/// wakes on a change anywhere in the best `n` levels each side, matching
-/// `book::Book::depth(n)`'s own shape -- but note `depth(n)` builds a
-/// fresh `Vec` every call (see `book.rs`), so a `Top(n)` subscription's
-/// wake-check is **not** allocation-free; that cost is inherent to the
-/// only depth-returning method `Book` exposes, not something this
-/// component introduces. See `cache_user_doc.md` §"waking vs access" and
-/// its measured allocation numbers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Depth {
-    Bbo,
-    Top(u8),
-}
-
-pub type SubscriberId = usize;
-
-/// The strategy-facing wake callback. Deliberately thin -- the real
-/// `Strategy` trait (D24: `on_start`/`on_book`/`on_trade`/... ) is later
-/// work, out of scope here (see this file's header). This is just enough
-/// surface for a no-op strategy to prove the dispatch shape end to end,
-/// and realistic enough for a scheduler-driven loop to call into (a
-/// vtable call through `Box<dyn Subscriber>`, same cost shape D24
-/// documents for `dyn Strategy`).
-pub trait Subscriber {
-    fn on_wake(&mut self, instrument: InstrumentId, depth: Depth);
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct BboSnapshot {
-    bid: Option<PriceLevel>,
-    ask: Option<PriceLevel>,
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct DispatchStats {
-    /// How many times `on_book_touched` was called (one per book-
-    /// mutating, filter-passing event actually applied to a book).
-    pub book_touches: u64,
-    /// How many individual subscriber wake calls actually fired (a
-    /// no-change touch fires zero; one BBO change wakes every BBO
-    /// subscriber on that instrument).
-    pub wakes_fired: u64,
-}
-
-/// Subscriber lists keyed by `(instrument, depth)` (FR-B18, verbatim).
-/// Owns the "last observed snapshot" per key needed to detect a real
-/// value change, so a wake only fires when the subscribed-to slice of
-/// the book actually changed -- not on every event that merely touched
-/// that instrument's book at all (an order added ten levels deep must
-/// not wake a BBO subscriber; D25).
-pub struct Dispatcher {
-    subs_by_key: HashMap<(InstrumentId, Depth), Vec<SubscriberId>>,
-    by_instrument: HashMap<InstrumentId, Vec<Depth>>,
-    subscribers: Vec<Box<dyn Subscriber>>,
-    bbo_snapshots: HashMap<(InstrumentId, Depth), BboSnapshot>,
-    depth_snapshots: HashMap<(InstrumentId, Depth), Vec<PriceLevel>>,
-    pub stats: DispatchStats,
-}
-
-impl Default for Dispatcher {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Dispatcher {
-    pub fn new() -> Self {
-        Dispatcher {
-            subs_by_key: HashMap::new(),
-            by_instrument: HashMap::new(),
-            subscribers: Vec::new(),
-            bbo_snapshots: HashMap::new(),
-            depth_snapshots: HashMap::new(),
-            stats: DispatchStats::default(),
-        }
-    }
-
-    /// Registers a subscriber at `(instrument, depth)`. This is setup
-    /// work (a strategy's `on_start`, or a later dynamic subscribe/
-    /// unsubscribe per D15) -- allocation here is expected and fine;
-    /// NFR-05 targets the steady-state per-event hot path
-    /// (`on_book_touched`), not one-time registration. Pre-populates this
-    /// key's snapshot slot too, so the hot path's `get_mut` below always
-    /// finds an existing entry rather than inserting one on first touch.
-    pub fn subscribe(&mut self, instrument: InstrumentId, depth: Depth, subscriber: Box<dyn Subscriber>) -> SubscriberId {
-        let id = self.subscribers.len();
-        self.subscribers.push(subscriber);
-        self.subs_by_key.entry((instrument, depth)).or_default().push(id);
-        self.by_instrument.entry(instrument).or_default().push(depth);
-        match depth {
-            Depth::Bbo => {
-                self.bbo_snapshots.entry((instrument, depth)).or_default();
-            }
-            Depth::Top(_) => {
-                self.depth_snapshots.entry((instrument, depth)).or_default();
-            }
-        }
-        id
-    }
-
-    /// Call once per event that actually touched `instrument`'s book
-    /// (i.e. after `BookBuilder::apply`). Checks every depth this
-    /// instrument has subscribers at; wakes only the ones whose
-    /// subscribed slice of the book actually changed value.
-    ///
-    /// **Allocation profile (measured, see cache_user_doc.md):** the
-    /// `Depth::Bbo` branch below touches only `Option<PriceLevel>`
-    /// (`Copy`) values and pre-existing `HashMap` slots via `get_mut` --
-    /// no allocation, in steady state, once `subscribe` has pre-
-    /// populated every key this run ever visits. The `Depth::Top(n)`
-    /// branch calls `book.depth(n)`, which builds a fresh `Vec` every
-    /// call (inherent to `Book`'s only depth-returning method, not
-    /// introduced here) -- not allocation-free. This run's own no-op
-    /// strategy subscribes at `Depth::Bbo` only, so the acceptance run's
-    /// hot path is the zero-allocation branch.
-    pub fn on_book_touched(&mut self, book: &dyn Book, instrument: InstrumentId) {
-        self.stats.book_touches += 1;
-        let Some(depths) = self.by_instrument.get(&instrument) else {
-            return;
-        };
-        for &depth in depths {
-            let changed = match depth {
-                Depth::Bbo => {
-                    let bid = book.best_bid();
-                    let ask = book.best_ask();
-                    match self.bbo_snapshots.get_mut(&(instrument, depth)) {
-                        Some(prev) if prev.bid != bid || prev.ask != ask => {
-                            prev.bid = bid;
-                            prev.ask = ask;
-                            true
-                        }
-                        _ => false,
-                    }
-                }
-                Depth::Top(n) => {
-                    let cur = book.depth(n as usize); // allocates -- see doc comment above
-                    match self.depth_snapshots.get_mut(&(instrument, depth)) {
-                        Some(prev) if *prev != cur => {
-                            *prev = cur;
-                            true
-                        }
-                        _ => false,
-                    }
-                }
-            };
-            if changed {
-                if let Some(ids) = self.subs_by_key.get(&(instrument, depth)) {
-                    self.stats.wakes_fired += ids.len() as u64;
-                    for &id in ids {
-                        self.subscribers[id].on_wake(instrument, depth);
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------
 // Own orders/positions -- FR-B17's stub slot.
 // ---------------------------------------------------------------------
 
@@ -365,7 +203,6 @@ pub struct Cache {
     books: BookBuilder,
     refdata: InstrumentMaster,
     own_orders: OwnOrdersAndPositions,
-    dispatch: Dispatcher,
 }
 
 impl Cache {
@@ -407,7 +244,6 @@ impl Cache {
             books,
             refdata,
             own_orders: OwnOrdersAndPositions::default(),
-            dispatch: Dispatcher::new(),
         }
     }
 
@@ -429,13 +265,14 @@ impl Cache {
 
     /// FR-B16: filter, then (if it passes) book work. Returns the
     /// instrument the event applied to, so a caller can decide whether
-    /// to also run dispatch -- kept as a separate step from `dispatch`
-    /// below so a profiler (or a scheduler that wants to batch several
-    /// book-touches before waking anyone) can measure/call them
-    /// independently. An event for an unfiltered instrument, or one that
-    /// carries no routable `SecurityID` at all in this filtered event's
-    /// case, costs one hash-set lookup (or one match arm) and nothing
-    /// else -- no book work.
+    /// to also drive `event_dispatcher::EventDispatcher::on_book_touched`
+    /// -- kept as its own step (not a combined `on_message`) so `main.rs`
+    /// can wire dispatch explicitly, rather than `Cache` doing it
+    /// internally (see this file's header: `Cache` no longer knows
+    /// dispatch exists at all). An event for an unfiltered instrument, or
+    /// one that carries no routable `SecurityID` at all in this filtered
+    /// event's case, costs one hash-set lookup (or one match arm) and
+    /// nothing else -- no book work.
     pub fn apply(&mut self, event: &DecodedMessage) -> Option<InstrumentId> {
         let sid = security_id_of(event)?;
         if !self.filter.passes(sid) {
@@ -443,27 +280,6 @@ impl Cache {
         }
         self.books.apply(event);
         Some(InstrumentId(sid as u32))
-    }
-
-    /// FR-B18: run the depth-scoped wake check for `instrument`'s book.
-    /// Separate from `apply` for the same profiling/batching reason.
-    pub fn dispatch(&mut self, instrument: InstrumentId) {
-        if let Some(book) = self.books.get(instrument) {
-            self.dispatch.on_book_touched(book, instrument);
-        }
-    }
-
-    /// The realistic single call a scheduler-driven loop makes per
-    /// decoded message: filter -> book -> dispatch, in that order,
-    /// exactly the pipeline this task brief names.
-    pub fn on_message(&mut self, event: &DecodedMessage) {
-        if let Some(instrument) = self.apply(event) {
-            self.dispatch(instrument);
-        }
-    }
-
-    pub fn subscribe(&mut self, instrument: InstrumentId, depth: Depth, subscriber: Box<dyn Subscriber>) -> SubscriberId {
-        self.dispatch.subscribe(instrument, depth, subscriber)
     }
 
     /// Full book access, **not gated by subscription depth** -- D25's
@@ -489,10 +305,6 @@ impl Cache {
         &self.own_orders
     }
 
-    pub fn dispatch_stats(&self) -> DispatchStats {
-        self.dispatch.stats
-    }
-
     pub fn filter(&self) -> &InstrumentFilter {
         &self.filter
     }
@@ -501,7 +313,7 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decoder::{OrderAdd, OrderModify, Price as DPrice, Qty as DQty, Side as DSide};
+    use crate::decoder::{OrderAdd, Price as DPrice, Qty as DQty, Side as DSide};
     use crate::types::{Currency, Date, InstrumentKind, Price, Settlement, Venue, YearMonth};
 
     /// A generous synthetic band, `[0, 10_000]` rupees at a 1-rupee tick
@@ -611,104 +423,8 @@ mod tests {
         assert!(cache.book(InstrumentId(999_999)).is_none());
     }
 
-    // ---- Dispatch: waking vs access ---------------------------------------
-
-    struct CountingSubscriber {
-        wakes: std::rc::Rc<std::cell::Cell<u32>>,
-    }
-    impl Subscriber for CountingSubscriber {
-        fn on_wake(&mut self, _instrument: InstrumentId, _depth: Depth) {
-            self.wakes.set(self.wakes.get() + 1);
-        }
-    }
-
-    #[test]
-    fn bbo_subscriber_wakes_on_top_change_not_on_deeper_level() {
-        let filter = InstrumentFilter::from_native_ids([467_013]);
-        let master = InstrumentMaster::new(vec![future_instrument(467_013, "CRUDEOIL")]);
-        let mut cache = Cache::new(master, filter);
-        cache.seed_book_band(InstrumentId(467_013), TEST_BAND.0, TEST_BAND.1);
-
-        let wakes = std::rc::Rc::new(std::cell::Cell::new(0u32));
-        let id = InstrumentId(467_013);
-        cache.subscribe(id, Depth::Bbo, Box::new(CountingSubscriber { wakes: wakes.clone() }));
-
-        // First bid ever -- best_bid changes from None to Some: wakes.
-        cache.on_message(&add(467_013, DSide::Buy, 5_000 * RUPEE_RAW, 10, 1));
-        assert_eq!(wakes.get(), 1);
-
-        // A second order at a strictly worse (lower) bid price: best_bid
-        // is untouched (still 5000 x 10) -- must NOT wake a BBO subscriber.
-        cache.on_message(&add(467_013, DSide::Buy, 4_990 * RUPEE_RAW, 50, 2));
-        assert_eq!(wakes.get(), 1, "a deeper-level-only change must not wake a BBO subscriber");
-
-        // A new best bid: wakes again.
-        cache.on_message(&add(467_013, DSide::Buy, 5_010 * RUPEE_RAW, 1, 3));
-        assert_eq!(wakes.get(), 2);
-    }
-
-    #[test]
-    fn full_book_reachable_regardless_of_subscribed_depth() {
-        // D25: subscription governs waking, not access. Subscribe at
-        // BBO only, then confirm depth-3 access still works on demand.
-        let filter = InstrumentFilter::from_native_ids([467_013]);
-        let master = InstrumentMaster::new(vec![future_instrument(467_013, "CRUDEOIL")]);
-        let mut cache = Cache::new(master, filter);
-        cache.seed_book_band(InstrumentId(467_013), TEST_BAND.0, TEST_BAND.1);
-        let id = InstrumentId(467_013);
-        cache.subscribe(id, Depth::Bbo, Box::new(CountingSubscriber { wakes: std::rc::Rc::new(std::cell::Cell::new(0)) }));
-
-        cache.on_message(&add(467_013, DSide::Buy, 5_000 * RUPEE_RAW, 10, 1));
-        cache.on_message(&add(467_013, DSide::Buy, 4_990 * RUPEE_RAW, 5, 2));
-        cache.on_message(&add(467_013, DSide::Buy, 4_980 * RUPEE_RAW, 3, 3));
-
-        let book = cache.book(id).unwrap();
-        let depth = book.depth(10);
-        // Three distinct bid levels reachable even though only a BBO
-        // subscription exists -- access was never gated by it.
-        assert!(depth.len() >= 3, "expected at least 3 levels reachable on demand, got {depth:?}");
-    }
-
-    #[test]
-    fn modify_moving_bbo_wakes_exactly_once() {
-        let filter = InstrumentFilter::from_native_ids([467_013]);
-        let master = InstrumentMaster::new(vec![future_instrument(467_013, "CRUDEOIL")]);
-        let mut cache = Cache::new(master, filter);
-        cache.seed_book_band(InstrumentId(467_013), TEST_BAND.0, TEST_BAND.1);
-        let wakes = std::rc::Rc::new(std::cell::Cell::new(0u32));
-        let id = InstrumentId(467_013);
-        cache.subscribe(id, Depth::Bbo, Box::new(CountingSubscriber { wakes: wakes.clone() }));
-
-        cache.on_message(&add(467_013, DSide::Sell, 5_200 * RUPEE_RAW, 10, 1));
-        assert_eq!(wakes.get(), 1);
-        cache.on_message(&DecodedMessage::OrderModify(OrderModify {
-            seq: 0,
-            security_id: 467_013,
-            side: DSide::Sell,
-            prev_price: DPrice(5_200 * RUPEE_RAW),
-            prev_qty: DQty(10),
-            price: DPrice(5_190 * RUPEE_RAW), // moves best_ask
-            qty: DQty(10),
-            prev_priority_ts: 1,
-            priority_ts: 2,
-            event_time: 0,
-        }));
-        assert_eq!(wakes.get(), 2);
-    }
-
-    #[test]
-    fn dispatch_stats_count_touches_and_wakes_separately() {
-        let filter = InstrumentFilter::from_native_ids([467_013]);
-        let master = InstrumentMaster::new(vec![future_instrument(467_013, "CRUDEOIL")]);
-        let mut cache = Cache::new(master, filter);
-        cache.seed_book_band(InstrumentId(467_013), TEST_BAND.0, TEST_BAND.1);
-        let id = InstrumentId(467_013);
-        cache.subscribe(id, Depth::Bbo, Box::new(CountingSubscriber { wakes: std::rc::Rc::new(std::cell::Cell::new(0)) }));
-
-        cache.on_message(&add(467_013, DSide::Buy, 5_000 * RUPEE_RAW, 10, 1)); // touch + wake (None->Some)
-        cache.on_message(&add(467_013, DSide::Buy, 4_990 * RUPEE_RAW, 5, 2)); // touch, no wake (deeper level)
-        let stats = cache.dispatch_stats();
-        assert_eq!(stats.book_touches, 2);
-        assert_eq!(stats.wakes_fired, 1);
-    }
+    // Dispatch (waking vs access) tests moved to
+    // `event_dispatcher::tests` -- see that module. `Cache` no longer
+    // has anything to test on this front; `apply` alone (no dispatch
+    // step) is covered by the filter/roll-trap tests above.
 }

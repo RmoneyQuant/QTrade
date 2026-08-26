@@ -857,6 +857,23 @@ pub struct OrderEventRecord {
     pub resulting_state: OrderState,
 }
 
+/// What one call to a mutating `ExecutionEngine` method just produced --
+/// the real slice of `self.fills`/`self.order_events` that call itself
+/// added, not the whole running history. This is what makes live
+/// delivery possible: `control_dispatcher::ControlDispatcher::dispatch`
+/// takes one of these and calls a strategy's `on_fill`/`on_order_update`
+/// once per new record, the moment they're produced, rather than a
+/// strategy only ever seeing them via `ExecutionEngine::fills()`/
+/// `order_events()` after the whole run ends. See each wrapping method's
+/// own doc comment (search `_inner` in this file) for how this is
+/// computed -- a before/after length snapshot around the unchanged
+/// original body, not a new accounting path.
+#[derive(Debug, Clone, Default)]
+pub struct ExecOutcome {
+    pub fills: Vec<FillRecord>,
+    pub order_events: Vec<OrderEventRecord>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct MessageCounts {
     pub new_order_attempts: u64,
@@ -1132,6 +1149,18 @@ impl ExecutionEngine {
 
     // ---- gates + submission (FR-B27, D36) ----
 
+    /// Runs Validation -> RMS -> local OTR governor, then (only if all
+    /// three pass) forwards to the venue, and hands back whatever
+    /// fills/order-events this one call produced -- see `ExecOutcome`'s
+    /// own doc comment. A before/after snapshot of `self.fills`/
+    /// `self.order_events`' lengths around the unchanged original body
+    /// (`submit_order_inner`), not a new accounting path.
+    pub fn submit_order(&mut self, intent: NewOrderIntent, now_ns: u64) -> (GateOutcome, ExecOutcome) {
+        let (fills_before, events_before) = (self.fills.len(), self.order_events.len());
+        let outcome = self.submit_order_inner(intent, now_ns);
+        (outcome, ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() })
+    }
+
     /// Runs Validation -> RMS -> local OTR governor, in that order, then
     /// (only if all three pass) forwards to the venue. The order record
     /// is created **before** the gates run, per FR-B27, so a
@@ -1139,7 +1168,7 @@ impl ExecutionEngine {
     /// and in reporting, and still counts toward the local OTR governor
     /// if it reached that gate (and only if it reached that gate --
     /// Validation/RMS failures never touch `local_otr` at all).
-    pub fn submit_order(&mut self, intent: NewOrderIntent, now_ns: u64) -> GateOutcome {
+    fn submit_order_inner(&mut self, intent: NewOrderIntent, now_ns: u64) -> GateOutcome {
         let client_order_id = self.clord.next();
         self.message_counts.new_order_attempts += 1;
 
@@ -1236,13 +1265,21 @@ impl ExecutionEngine {
     // ---- cancel (two-phase, so the PendingCancel -> Filled race is
     // ---- actually constructible, not merely asserted) ----
 
+    /// Same `ExecOutcome`-returning wrapper as `submit_order`, around
+    /// the unchanged `request_cancel_inner`.
+    pub fn request_cancel(&mut self, client_order_id: u64, now_ns: u64) -> (bool, ExecOutcome) {
+        let (fills_before, events_before) = (self.fills.len(), self.order_events.len());
+        let ok = self.request_cancel_inner(client_order_id, now_ns);
+        (ok, ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() })
+    }
+
     /// Phase 1 of a cancel: marks the order `PendingCancel` -- "cancel
     /// sent, awaiting venue response" (STRATEGY-GUIDE.md §7a). Does
     /// **not** itself call the venue; in production that call happens
     /// later, when the scheduler-driven caller's `OrderArrival`-class
     /// event for this cancel message actually fires (T04/D36). Returns
     /// `false` if the order isn't currently open (nothing to cancel).
-    pub fn request_cancel(&mut self, client_order_id: u64, now_ns: u64) -> bool {
+    fn request_cancel_inner(&mut self, client_order_id: u64, now_ns: u64) -> bool {
         self.message_counts.cancel_requests += 1;
         let Some(order) = self.orders.get_mut(&client_order_id) else { return false };
         if !order.state.is_open() {
@@ -1251,6 +1288,14 @@ impl ExecutionEngine {
         order.state = OrderState::PendingCancel;
         self.log_event(client_order_id, "cancel requested", OrderState::PendingCancel, now_ns);
         true
+    }
+
+    /// Same `ExecOutcome`-returning wrapper, around the unchanged
+    /// `deliver_cancel_to_venue_inner`.
+    pub fn deliver_cancel_to_venue(&mut self, client_order_id: u64, now_ns: u64) -> ExecOutcome {
+        let (fills_before, events_before) = (self.fills.len(), self.order_events.len());
+        self.deliver_cancel_to_venue_inner(client_order_id, now_ns);
+        ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() }
     }
 
     /// Phase 2: the cancel message actually reaches the venue. Between
@@ -1262,7 +1307,7 @@ impl ExecutionEngine {
     /// then has nothing to apply, and the order is left exactly as the
     /// fill already left it: `Filled`. This is the race, made real rather
     /// than asserted by inspection.
-    pub fn deliver_cancel_to_venue(&mut self, client_order_id: u64, now_ns: u64) {
+    fn deliver_cancel_to_venue_inner(&mut self, client_order_id: u64, now_ns: u64) {
         self.venue_cancel_calls += 1;
         let reports = self.venue.cancel(client_order_id, now_ns);
         self.handle_exec_reports(reports, now_ns);
@@ -1270,7 +1315,14 @@ impl ExecutionEngine {
 
     // ---- modify (two-phase, same shape as cancel) ----
 
-    pub fn request_modify(&mut self, client_order_id: u64, now_ns: u64) -> bool {
+    /// Same `ExecOutcome`-returning wrapper as `request_cancel`.
+    pub fn request_modify(&mut self, client_order_id: u64, now_ns: u64) -> (bool, ExecOutcome) {
+        let (fills_before, events_before) = (self.fills.len(), self.order_events.len());
+        let ok = self.request_modify_inner(client_order_id, now_ns);
+        (ok, ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() })
+    }
+
+    fn request_modify_inner(&mut self, client_order_id: u64, now_ns: u64) -> bool {
         self.message_counts.modify_requests += 1;
         let Some(order) = self.orders.get_mut(&client_order_id) else { return false };
         if !matches!(order.state, OrderState::Accepted | OrderState::PartiallyFilled) {
@@ -1281,7 +1333,14 @@ impl ExecutionEngine {
         true
     }
 
-    pub fn deliver_modify_to_venue(&mut self, client_order_id: u64, new_qty: Qty, new_price: Option<Price>, now_ns: u64) {
+    /// Same `ExecOutcome`-returning wrapper as `deliver_cancel_to_venue`.
+    pub fn deliver_modify_to_venue(&mut self, client_order_id: u64, new_qty: Qty, new_price: Option<Price>, now_ns: u64) -> ExecOutcome {
+        let (fills_before, events_before) = (self.fills.len(), self.order_events.len());
+        self.deliver_modify_to_venue_inner(client_order_id, new_qty, new_price, now_ns);
+        ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() }
+    }
+
+    fn deliver_modify_to_venue_inner(&mut self, client_order_id: u64, new_qty: Qty, new_price: Option<Price>, now_ns: u64) {
         self.venue_modify_calls += 1;
         let reports = self.venue.modify(client_order_id, new_qty, new_price, now_ns);
         self.handle_exec_reports(reports, now_ns);
@@ -1290,7 +1349,14 @@ impl ExecutionEngine {
     // ---- unsolicited: end of day / GTD (no live driver yet; the
     // ---- transition exists so later session-state work can call it) ----
 
-    pub fn mark_expired(&mut self, client_order_id: u64, now_ns: u64) -> bool {
+    /// Same `ExecOutcome`-returning wrapper as `request_cancel`.
+    pub fn mark_expired(&mut self, client_order_id: u64, now_ns: u64) -> (bool, ExecOutcome) {
+        let (fills_before, events_before) = (self.fills.len(), self.order_events.len());
+        let ok = self.mark_expired_inner(client_order_id, now_ns);
+        (ok, ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() })
+    }
+
+    fn mark_expired_inner(&mut self, client_order_id: u64, now_ns: u64) -> bool {
         let Some(order) = self.orders.get_mut(&client_order_id) else { return false };
         if !order.state.is_open() {
             return false;
@@ -1316,7 +1382,18 @@ impl ExecutionEngine {
     /// reporting "no one was ahead of you" for an order that in fact
     /// queued behind real size. See execution_user_doc.md for the test
     /// that caught this and the fix.
-    pub fn on_market_event(&mut self, event: &DecodedMessage, now_ns: u64) {
+    /// Same `ExecOutcome`-returning wrapper as `submit_order`, around the
+    /// unchanged `on_market_event_inner` -- this is the one of the seven
+    /// wrapped methods `main.rs`'s real replay loop actually calls every
+    /// event, and therefore the one real path `control_dispatcher`
+    /// currently ever receives anything through.
+    pub fn on_market_event(&mut self, event: &DecodedMessage, now_ns: u64) -> ExecOutcome {
+        let (fills_before, events_before) = (self.fills.len(), self.order_events.len());
+        self.on_market_event_inner(event, now_ns);
+        ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() }
+    }
+
+    fn on_market_event_inner(&mut self, event: &DecodedMessage, now_ns: u64) {
         for (&id, order) in self.orders.iter() {
             if order.state.is_open() {
                 if let Some(ahead) = self.venue.resting_qty_ahead(id) {
@@ -1636,7 +1713,7 @@ mod tests {
     fn tick_size_violation_is_denied_locally_and_never_reaches_the_venue() {
         let mut eng = engine(vec![future_instrument(1, 10, 100, 1)]);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(105)), qty: Lots(5) };
-        let outcome = eng.submit_order(intent, 0);
+        let (outcome, _) = eng.submit_order(intent, 0);
         assert!(matches!(outcome, GateOutcome::Denied { reason: DenyReason::TickSize, .. }));
         assert_eq!(eng.venue_submit_calls(), 0, "a locally-denied order must never call SimExchange::submit");
         let GateOutcome::Denied { client_order_id, .. } = outcome else { unreachable!() };
@@ -1649,7 +1726,7 @@ mod tests {
     fn freeze_qty_violation_is_denied_locally_and_never_reaches_the_venue() {
         let mut eng = engine(vec![future_instrument(1, 10, 50, 1)]);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(51) };
-        let outcome = eng.submit_order(intent, 0);
+        let (outcome, _) = eng.submit_order(intent, 0);
         assert!(matches!(outcome, GateOutcome::Denied { reason: DenyReason::FreezeQty, .. }));
         assert_eq!(eng.venue_submit_calls(), 0);
     }
@@ -1668,13 +1745,13 @@ mod tests {
 
         for i in 0..2u64 {
             let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100 + i as i64)), qty: Lots(1) };
-            let outcome = eng.submit_order(intent, 0);
+            let (outcome, _) = eng.submit_order(intent, 0);
             assert!(matches!(outcome, GateOutcome::Submitted { .. }), "first two messages within the window should be admitted");
         }
         assert_eq!(eng.venue_submit_calls(), 2);
 
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(103)), qty: Lots(1) };
-        let outcome = eng.submit_order(intent, 0);
+        let (outcome, _) = eng.submit_order(intent, 0);
         assert!(matches!(outcome, GateOutcome::Denied { reason: DenyReason::LocalOtrOrRate, .. }));
         assert_eq!(eng.venue_submit_calls(), 2, "the local governor's rejection must not call the venue at all -- the venue's own OTR governor (D19) is a wholly separate mechanism");
     }
@@ -1690,7 +1767,7 @@ mod tests {
             0,
         );
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::BookOrCancel(Price(150)), qty: Lots(5) };
-        let outcome = eng.submit_order(intent, 0);
+        let (outcome, _) = eng.submit_order(intent, 0);
         assert!(matches!(outcome, GateOutcome::Submitted { .. }), "BOC passed every local gate -- it must reach the venue");
         assert_eq!(eng.venue_submit_calls(), 1, "unlike Denied, a venue-bound order DOES call submit");
         let GateOutcome::Submitted { client_order_id } = outcome else { unreachable!() };
@@ -1707,7 +1784,7 @@ mod tests {
     fn partial_fill_then_remainder_fill_reaches_filled_via_partially_filled() {
         let mut eng = engine(vec![future_instrument(1, 1, 1000, 1)]);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(150)), qty: Lots(10) };
-        let outcome = eng.submit_order(intent, 0);
+        let (outcome, _) = eng.submit_order(intent, 0);
         let GateOutcome::Submitted { client_order_id } = outcome else { panic!() };
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Accepted);
 
@@ -1738,10 +1815,10 @@ mod tests {
     fn cancel_confirmation_reaches_canceled_through_pending_cancel() {
         let mut eng = engine(vec![future_instrument(1, 1, 1000, 1)]);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(10) };
-        let GateOutcome::Submitted { client_order_id } = eng.submit_order(intent, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Accepted);
 
-        assert!(eng.request_cancel(client_order_id, 5));
+        assert!(eng.request_cancel(client_order_id, 5).0);
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::PendingCancel);
         assert!(eng.order(client_order_id).unwrap().state.is_open(), "still exposed while the cancel is in flight");
 
@@ -1758,14 +1835,14 @@ mod tests {
         let mut eng = engine(vec![future_instrument(1, 1, 1000, 1)]);
         // 1. Submit a resting order.
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(150)), qty: Lots(10) };
-        let GateOutcome::Submitted { client_order_id } = eng.submit_order(intent, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Accepted);
 
         // 2. Strategy decides to cancel -- the cancel message is "sent"
         // (state moves to PendingCancel) but has NOT yet reached the
         // venue (deliver_cancel_to_venue not called yet -- modelling the
         // outbound leg still in flight).
-        assert!(eng.request_cancel(client_order_id, 100));
+        assert!(eng.request_cancel(client_order_id, 100).0);
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::PendingCancel);
         assert_eq!(eng.venue_cancel_calls(), 0, "the cancel has not actually reached the venue yet");
 
@@ -1822,10 +1899,10 @@ mod tests {
         let mut eng = ExecutionEngine::new(run_config, vec![future_instrument(1, 1, 1000, 1)], Box::new(AlwaysAllowRms), CostConfig::default(), venue_otr, vec![], true);
 
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(10) };
-        let GateOutcome::Submitted { client_order_id } = eng.submit_order(intent, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Accepted);
 
-        assert!(eng.request_modify(client_order_id, 0));
+        assert!(eng.request_modify(client_order_id, 0).0);
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::PendingUpdate);
 
         eng.deliver_modify_to_venue(client_order_id, Qty(20), Some(Price(101)), 0);
@@ -1840,8 +1917,8 @@ mod tests {
     fn expire_transitions_an_open_order_to_a_terminal_state() {
         let mut eng = engine(vec![future_instrument(1, 1, 1000, 1)]);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(10) };
-        let GateOutcome::Submitted { client_order_id } = eng.submit_order(intent, 0) else { panic!() };
-        assert!(eng.mark_expired(client_order_id, 100));
+        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
+        assert!(eng.mark_expired(client_order_id, 100).0);
         let order = eng.order(client_order_id).unwrap();
         assert_eq!(order.state, OrderState::Expired);
         assert!(order.state.is_terminal());
@@ -1854,14 +1931,14 @@ mod tests {
         let mut eng = engine(vec![future_instrument(1, 1, 1000, 1)]);
         // Strategy 1 buys 10 lots (100,000 raw units).
         let i1 = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(10) };
-        let GateOutcome::Submitted { client_order_id: c1 } = eng.submit_order(i1, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id: c1 }, _) = eng.submit_order(i1, 0) else { panic!() };
         eng.on_market_event(&DecodedMessage::Trade(crate::decoder::Trade { seq: 0, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Buy, price: crate::decoder::Price(100), qty: crate::decoder::Qty(100_000), event_time: 999_999 }), 10);
         assert_eq!(eng.order(c1).unwrap().state, OrderState::Filled);
 
         // Strategy 2 sells 4 lots (40,000 raw units) of the SAME
         // instrument -- must not appear in strategy 1's own position.
         let i2 = NewOrderIntent { strategy_id: 2, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(101)), qty: Lots(4) };
-        let GateOutcome::Submitted { client_order_id: c2 } = eng.submit_order(i2, 20) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id: c2 }, _) = eng.submit_order(i2, 20) else { panic!() };
         eng.on_market_event(&DecodedMessage::Trade(crate::decoder::Trade { seq: 1, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(101), qty: crate::decoder::Qty(40_000), event_time: 999_998 }), 30);
         assert_eq!(eng.order(c2).unwrap().state, OrderState::Filled);
 
@@ -1896,13 +1973,13 @@ mod tests {
         let price_of = |rupees: f64| Price((rupees * RAW_PRICE_SCALE) as i64);
 
         let buy = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(price_of(5424.0)), qty: Lots(1) };
-        let GateOutcome::Submitted { client_order_id: c1 } = eng.submit_order(buy, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id: c1 }, _) = eng.submit_order(buy, 0) else { panic!() };
         eng.on_market_event(&DecodedMessage::Trade(crate::decoder::Trade { seq: 0, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Buy, price: crate::decoder::Price(price_of(5424.0).0), qty: crate::decoder::Qty(10_000), event_time: 1 }), 1);
         assert_eq!(eng.order(c1).unwrap().state, OrderState::Filled);
         assert_eq!(eng.portfolio().sub_account(1).unwrap().net_position(IID), 1, "1 lot bought");
 
         let sell = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(price_of(5421.0)), qty: Lots(1) };
-        let GateOutcome::Submitted { client_order_id: c2 } = eng.submit_order(sell, 2) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id: c2 }, _) = eng.submit_order(sell, 2) else { panic!() };
         eng.on_market_event(&DecodedMessage::Trade(crate::decoder::Trade { seq: 1, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(price_of(5421.0).0), qty: crate::decoder::Qty(10_000), event_time: 3 }), 3);
         assert_eq!(eng.order(c2).unwrap().state, OrderState::Filled);
 
@@ -1958,7 +2035,7 @@ mod tests {
         let pre_trade_cost = eng.cost_model().round_trip(&instrument, qty, price, Side::Sell);
 
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(price), qty };
-        let GateOutcome::Submitted { client_order_id } = eng.submit_order(intent, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
         // Real trade quantity in wire-raw units (`qty.to_raw_qty()`) so
         // this trade genuinely fully fills the resting order; `on_fill`
         // converts it back to `Lots` via `Qty::to_lots()` before calling
@@ -2000,7 +2077,7 @@ mod tests {
         // genuinely passive with a non-trivial queue position.
         eng.on_market_event(&DecodedMessage::OrderAdd(crate::decoder::OrderAdd { seq: 0, security_id: 1, side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(10), priority_ts: 1, event_time: 0 }), 0);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(150)), qty: Lots(5) };
-        let GateOutcome::Submitted { client_order_id } = eng.submit_order(intent, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Accepted);
 
         // Real trade consumes the resting order ahead of us (raw qty 10,

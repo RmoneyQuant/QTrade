@@ -1,37 +1,26 @@
 # Decoder — component documentation
 
-**What this component does, in one sentence:** reads one raw recorded MCX T7 EOBI capture file, byte by byte, and turns every message inside it into a typed value you can print or inspect.
+**What this component does, in one sentence:** turns one raw MCX T7 EOBI message's bytes into a typed value you can print, inspect, or feed into a book — the one real decoding entry point, shared by every mode.
 
-Code: [`decoder.rs`](decoder.rs) (this folder). Entry point: `qtrade/src/main.rs` calls `decoder::decode_file(...)`.
+Code: [`decoder.rs`](decoder.rs) (this folder). No `[[bin]]` target of its own — every real consumer includes it as a module: `main.rs` (`[[bin]] qtrade`, via `feed_replay::replay`), and each component's own `*-validate` harness.
 
 ---
 
-## 1. How to run it
+## 1. There is no standalone decode-only CLI anymore
 
-From `qtrade/`:
+Until 2026-08-25, `main.rs` was frozen as a minimal CLI whose only job was calling a now-removed `decoder::decode_file(...)` — read a whole capture file, print per-template-ID counts and (optionally) a per-message dump. That mode was retired once `main.rs` became the real orchestrator (`qtrade <config-file>` — see `../main_user_doc.md`): decoding is no longer something you ask for on its own, it's step one of every real run, done automatically. `decode_file` and its `Summary` return type are gone from `decoder.rs` entirely (confirmed, at removal time, to have no other real caller) — what's left, `decode_message`/`decode_messages` below, is unchanged and exactly as load-bearing as before.
 
-```bash
-source "$HOME/.cargo/env"     # once per new terminal, puts cargo/rustc on PATH
-cargo build --release
-./target/release/mcx-decoder <capture-file> [max-records-to-print] [skip-records] [--debug]
+## 2. The real API
+
+```rust
+pub fn decode_message(template_id: u16, seq: u32, m: &[u8]) -> DecodedMessage;
+pub fn decode_messages(data: &[u8]) -> impl Iterator<Item = DecodedMessage> + '_;
 ```
 
-| Argument | Default | Meaning |
-|---|---|---|
-| `<capture-file>` | required | Path to a raw `.bin` recording (see §2 for what this file actually is) |
-| `max-records-to-print` | 20 | How many outer records to print to screen. The whole file is always decoded and counted regardless — this only limits *printed* output |
-| `skip-records` | 0 | Skip this many records before printing starts. Useful because the first few thousand records of a session are nothing but pre-market heartbeats |
-| `--debug` | off | Print each message's full field dump (`{:?}`) instead of the one-line human summary (`{}`) — see §5 |
+- **`decode_message`** — the one real dispatch: given a template ID and one message's already-sliced-out bytes, returns the typed `DecodedMessage`. Every real consumer (`feed_replay::replay`, `book`'s own streaming validation, `cache`/`execution`'s test harnesses) reads the outer/inner wire framing itself (§3 below) and calls this directly once it has one message's bytes in hand.
+- **`decode_messages`** — a convenience iterator over an already-loaded buffer, for a caller that has (or wants) the whole file in memory rather than streaming it record by record.
 
-Example — print 5 real orders from partway into a real session:
-```bash
-./target/release/mcx-decoder /mnt/MCX_Recording_Files/mcx_feeder_Increment_capture_19_01_2026_1_1.bin 5 20000
-```
-
-Example — just get the correctness summary for the whole file, no per-message printing:
-```bash
-./target/release/mcx-decoder /mnt/MCX_Recording_Files/mcx_feeder_Increment_capture_19_01_2026_1_1.bin 0 0
-```
+To just look at what's inside a real file without building anything else, the shortest path today is `feed-replay-validate` or any `*-validate` binary's own real-data run (see each component's own user doc) — there's no smaller-purpose tool than that anymore.
 
 ---
 
@@ -71,7 +60,7 @@ The file is a back-to-back sequence of records, each shaped like this:
 - **`capture_ts`** — a local timestamp stamped when this packet was captured. **This is not a wall-clock date** — converting it to a calendar date gives 1970, because it behaves like a monotonic clock reading (arbitrary reference point, e.g. time since some internal clock start), not nanoseconds-since-1970. It's only meaningful for ordering records relative to each other, never for "what time did this happen" — for that, see `TransactTime` inside the `PacketHeader` message in §3.2, which *is* a real epoch timestamp.
 - **`payload`** — the actual EOBI message bytes for this packet. May contain more than one message (see §3.2).
 
-The decoder reads `length`, computes `payload_len = length - 8`, and jumps forward `8 (length field) + 8 (timestamp) + payload_len` bytes to find the next record. See `decode_file()` in `decoder.rs`.
+The decoder reads `length`, computes `payload_len = length - 8`, and jumps forward `8 (length field) + 8 (timestamp) + payload_len` bytes to find the next record. See `feed_replay::RecordSource` (`feed_replay.rs`) for the real streaming implementation, or `decode_messages()` in `decoder.rs` for the whole-buffer-in-memory equivalent.
 
 ### 3.2 Inner framing — one or more messages per packet
 
@@ -146,6 +135,6 @@ const MCX_QTY_DIVISOR: f64 = 10_000.0;             // raw qty / this = lots
 - No instrument filtering — decodes every product in the file.
 - No token → symbol lookup — prints `Token=467014`, not `CRUDEOILM` (done by hand during validation, not automated here).
 - No gap detection despite carrying `msg_seq_num`/`LastSeqNo` — that logic doesn't exist yet.
-- Reads the whole file into memory — fine at this stage, not the eventual streaming design.
+- No file reading of its own at all — `decode_message`/`decode_messages` only ever see bytes a caller already has. Whether that caller streams record-by-record (`feed_replay::RecordSource`, used for real multi-GB files) or loads a whole buffer up front (`decode_messages`) is the caller's choice, not this component's.
 
 These are scope boundaries, not missing features waiting to be discovered as bugs.

@@ -84,10 +84,10 @@ fn main() -> ExitCode {
     {
         let mut eng = engine(7, future_instrument(1, 1, 1000));
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(150)), qty: Lots(10) };
-        let GateOutcome::Submitted { client_order_id } = eng.submit_order(intent, 0) else { panic!("expected Submitted") };
+        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!("expected Submitted") };
         println!("  order {client_order_id} submitted, state={:?}", eng.order(client_order_id).unwrap().state);
 
-        assert!(eng.request_cancel(client_order_id, 100));
+        assert!(eng.request_cancel(client_order_id, 100).0);
         println!("  cancel requested (in flight, not yet delivered), state={:?}", eng.order(client_order_id).unwrap().state);
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::PendingCancel);
 
@@ -117,13 +117,13 @@ fn main() -> ExitCode {
     {
         let mut eng = engine(7, future_instrument(1, 10, 100));
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(105)), qty: Lots(5) };
-        let outcome = eng.submit_order(intent, 0);
+        let (outcome, _) = eng.submit_order(intent, 0);
         println!("  tick-size violation (price=105, tick_size=10): outcome={outcome:?}, venue_submit_calls={}", eng.venue_submit_calls());
         let ok_tick = matches!(outcome, GateOutcome::Denied { .. }) && eng.venue_submit_calls() == 0;
 
         let mut eng2 = engine(7, future_instrument(1, 10, 50));
         let intent2 = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(51) };
-        let outcome2 = eng2.submit_order(intent2, 0);
+        let (outcome2, _) = eng2.submit_order(intent2, 0);
         println!("  freeze-qty violation (qty=51, freeze_qty=50): outcome={outcome2:?}, venue_submit_calls={}", eng2.venue_submit_calls());
         let ok_freeze = matches!(outcome2, GateOutcome::Denied { .. }) && eng2.venue_submit_calls() == 0;
 
@@ -133,7 +133,7 @@ fn main() -> ExitCode {
         let mut eng3 = engine(7, future_instrument(1, 1, 1000));
         eng3.on_market_event(&add(DSide::Sell, 150, 10, 1), 0);
         let intent3 = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::BookOrCancel(Price(150)), qty: Lots(5) };
-        let outcome3 = eng3.submit_order(intent3, 0);
+        let (outcome3, _) = eng3.submit_order(intent3, 0);
         let GateOutcome::Submitted { client_order_id: c3 } = outcome3 else { panic!("BOC should reach the venue") };
         let order3 = eng3.order(c3).unwrap();
         println!(
@@ -178,7 +178,7 @@ fn main() -> ExitCode {
         let mut eng = engine(7, instrument.clone());
         let pre_trade_cost = eng.cost_model().round_trip(&instrument, qty, price, Side::Sell);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(price), qty };
-        let GateOutcome::Submitted { client_order_id } = eng.submit_order(intent, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
         // Real trade quantity in wire-raw units, matching `qty` (Lots)
         // converted via `to_raw_qty()` so this trade genuinely fully
         // fills the resting order -- not the pre-fix bug where a lot
@@ -215,7 +215,7 @@ fn main() -> ExitCode {
         let mut eng = engine(7, future_instrument(1, 1, 1000));
         eng.on_market_event(&add(DSide::Sell, 150, 10, 1), 0);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(150)), qty: Lots(5) };
-        let GateOutcome::Submitted { client_order_id } = eng.submit_order(intent, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Accepted);
 
         // First real trade consumes the 10 (raw) resting ahead of us --

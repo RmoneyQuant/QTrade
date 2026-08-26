@@ -26,11 +26,31 @@ mod book;
 mod refdata;
 #[path = "cache.rs"]
 mod cache;
+// Dispatch moved out of `cache` (see cache.rs's own header) -- this
+// harness now drives it explicitly, the same way `main.rs` does.
+#[path = "../event_dispatcher/event_dispatcher.rs"]
+mod event_dispatcher;
+// `control_dispatcher` now depends on `execution` (Phase B: `ControlHandler`
+// takes `execution::FillRecord`/`OrderEventRecord` directly) -- pulled in
+// here purely to satisfy that, not because this harness exercises order
+// submission itself.
+#[allow(dead_code)]
+#[path = "../simulator/simulator.rs"]
+mod simulator;
+#[allow(dead_code)]
+#[path = "../execution/execution.rs"]
+mod execution;
+#[path = "../control_dispatcher/control_dispatcher.rs"]
+mod control_dispatcher;
+#[path = "../strategy/strategy.rs"]
+mod strategy;
 
-use cache::{Cache, Depth, InstrumentFilter, Subscriber};
+use cache::{Cache, InstrumentFilter};
 use decoder::DecodedMessage;
+use event_dispatcher::{Depth, EventDispatcher};
+use strategy::Strategy;
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fs::File;
 use std::io::{self, BufReader, ErrorKind, Read};
 use std::path::Path;
@@ -137,8 +157,14 @@ struct NoOpStrategy {
     wakes: Rc<Cell<u64>>,
 }
 
-impl Subscriber for NoOpStrategy {
-    fn on_wake(&mut self, _instrument: InstrumentId, _depth: Depth) {
+impl Strategy for NoOpStrategy {
+    // This harness registers/subscribes `NoOpStrategy` directly (below,
+    // mirroring `main.rs`'s own setup-time wiring), not via a real
+    // `on_start`/`StartCtx` call -- there is nothing for this method to
+    // do.
+    fn on_start(&mut self, _ctx: &mut strategy::StartCtx) {}
+
+    fn on_book(&mut self, _ctx: &mut strategy::Ctx, _instrument: InstrumentId, _seq: u64, _packet_transact_time_ns: u64) {
         self.wakes.set(self.wakes.get() + 1);
     }
 }
@@ -163,7 +189,7 @@ struct RunCounters {
     dispatch_alloc_bytes: u64,
 }
 
-fn stream_file(label: &str, path: &str, cache: &mut Cache, stop_after: Option<u64>) -> io::Result<RunCounters> {
+fn stream_file(label: &str, path: &str, cache: &mut Cache, dispatcher: &mut EventDispatcher, engine: &mut execution::ExecutionEngine, stop_after: Option<u64>) -> io::Result<RunCounters> {
     let mut source = RecordSource::open(path)?;
     let mut payload = Vec::new();
     let mut counters = RunCounters::default();
@@ -184,7 +210,7 @@ fn stream_file(label: &str, path: &str, cache: &mut Cache, stop_after: Option<u6
 
             // Measured, not assumed (NFR-05): snapshot the global
             // counting allocator immediately around each of `apply` and
-            // `dispatch` separately, so a nonzero delta can be
+            // `on_book_touched` separately, so a nonzero delta can be
             // attributed to the right one of the two.
             let (a0, b0) = alloc_snapshot();
             if let Some(instrument) = cache.apply(&msg) {
@@ -192,7 +218,9 @@ fn stream_file(label: &str, path: &str, cache: &mut Cache, stop_after: Option<u6
                 counters.apply_alloc_count += a1 - a0;
                 counters.apply_alloc_bytes += b1 - b0;
 
-                cache.dispatch(instrument);
+                if let Some(book) = cache.book(instrument) {
+                    dispatcher.on_book_touched(book, instrument, cache, engine, seq as u64, 0);
+                }
 
                 let (a2, b2) = alloc_snapshot();
                 counters.dispatch_alloc_count += a2 - a1;
@@ -294,10 +322,27 @@ fn main() -> io::Result<()> {
     cache.seed_book_band(book::CRUDEOIL_ID, 523_200_000_000, 566_600_000_000); // Rs 5,232.00 - Rs 5,666.00
     cache.seed_book_band(book::NATURALGAS_ID, 22_160_000_000, 33_920_000_000); // Rs 221.60 - Rs 339.20 (full-session union)
 
+    // A throwaway engine -- this harness measures Cache/EventDispatcher
+    // allocation behavior only; it has no interest in execution at all.
+    // Passed through purely because `on_book_touched` now needs one to
+    // construct `Ctx` (Phase C).
+    let run_config = execution::RunConfig {
+        session_id: 1,
+        cost_config: execution::CostConfig::default(),
+        local_otr: execution::LocalOtrConfig { window_ns: 1_000_000_000, max_messages_per_window: 10_000 },
+        venue_otr: execution::OtrConfigSummary { window_ns: 1_000_000_000, max_messages_per_window: 10_000, max_otr_ratio_bits: 0 },
+        markout_horizons_ns: vec![],
+    };
+    let venue_otr = simulator::OtrConfig { window: std::time::Duration::from_secs(1), max_messages_per_window: 10_000, max_otr_ratio: 1_000_000.0 };
+    let mut engine = execution::ExecutionEngine::new(run_config, vec![], Box::new(execution::AlwaysAllowRms), execution::CostConfig::default(), venue_otr, vec![], false);
+
     let wakes_crude = Rc::new(Cell::new(0u64));
     let wakes_gas = Rc::new(Cell::new(0u64));
-    cache.subscribe(book::CRUDEOIL_ID, Depth::Bbo, Box::new(NoOpStrategy { wakes: wakes_crude.clone() }));
-    cache.subscribe(book::NATURALGAS_ID, Depth::Bbo, Box::new(NoOpStrategy { wakes: wakes_gas.clone() }));
+    let mut dispatcher = EventDispatcher::new();
+    let id_crude = dispatcher.register(Rc::new(RefCell::new(NoOpStrategy { wakes: wakes_crude.clone() })));
+    dispatcher.subscribe(id_crude, book::CRUDEOIL_ID, Depth::Bbo);
+    let id_gas = dispatcher.register(Rc::new(RefCell::new(NoOpStrategy { wakes: wakes_gas.clone() })));
+    dispatcher.subscribe(id_gas, book::NATURALGAS_ID, Depth::Bbo);
 
     let stop_after: Option<u64> = std::env::var("CACHE_DEBUG_STOP_AFTER_RECORDS")
         .ok()
@@ -313,7 +358,7 @@ fn main() -> io::Result<()> {
     for (label, path) in cases {
         println!("--- {label} ---");
         let file_start = Instant::now();
-        let counters = stream_file(label, path, &mut cache, stop_after)?;
+        let counters = stream_file(label, path, &mut cache, &mut dispatcher, &mut engine, stop_after)?;
         let elapsed = file_start.elapsed();
         println!(
             "  {} outer records, {} messages in {:.2}s -> {:.0} records/s, {:.0} messages/s",
@@ -337,7 +382,7 @@ fn main() -> io::Result<()> {
     }
     let elapsed = start.elapsed();
 
-    let stats = cache.dispatch_stats();
+    let stats = dispatcher.stats;
     println!("=== TOTAL ===");
     println!(
         "{} outer records, {} decoded messages, {:.2}s wall -> {:.0} records/s, {:.0} messages/s",

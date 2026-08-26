@@ -1,0 +1,334 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 1900 1650" width="1900" height="1650" role="img"
+     aria-label="qtrade's real current wiring, expanded: main.rs resolves strategy-declared underlying names to that day's real tokens once at startup, then feeds each decoded event independently to Cache and to ExecutionEngine, which never connect to each other. ExecutionEngine gates strategy-submitted orders (RMS, validate) before forwarding them to the separate SimExchange matching engine, but applies market events to SimExchange with no gate at all; SimExchange's exec reports are the only thing that reaches Portfolio and CostModel. EventDispatcher reads Cache and wakes the strategy's on_book/on_trade only for subscribed instruments, though ctx.book() can read any filtered instrument regardless of subscription. ControlDispatcher receives ctx.subscribe() as a borrowed reference to EventDispatcher and forwards it in the same call, without either dispatcher storing a reference to the other. The strategy calls back into ExecutionEngine directly to submit orders and to read Portfolio and CostModel, and into Cache directly for book/refdata reads. After the loop ends, main.rs reads the same ExecutionEngine instance directly to write orders.log, fills.log and report.txt.">
+
+  <defs>
+    <marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5b6270" />
+    </marker>
+    <marker id="ah-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1d5d9b" />
+    </marker>
+    <marker id="ah-exec" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b5551f" />
+    </marker>
+    <marker id="ah-strat" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2f6b45" />
+    </marker>
+    <marker id="ah-missing" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6f7580" />
+    </marker>
+  </defs>
+
+  <style>
+    text { font-family: "Segoe UI", Helvetica, Arial, sans-serif; fill: #1a1d23; }
+    .mono { font-family: Consolas, "SF Mono", Menlo, monospace; }
+    .title { font-size: 22px; font-weight: 700; }
+    .subtitle { font-size: 12.5px; fill: #5b6270; }
+    .lbl-title { font-weight: 700; font-size: 15px; }
+    .lbl-sub { font-size: 11px; fill: #5b6270; }
+    .lbl-code { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 11px; }
+    .lbl-cap { font-size: 10px; fill: #5b6270; }
+    .lbl-edge { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 10.5px; }
+    .lbl-edge-data { fill: #1d5d9b; }
+    .lbl-edge-exec { fill: #b5551f; }
+    .lbl-edge-strat { fill: #2f6b45; }
+    .lbl-edge-missing { fill: #6f7580; font-style: italic; }
+    .lbl-frame { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 12px; fill: #5b6270; }
+    .lbl-warn { font-size: 10px; fill: #a3382f; }
+    .lbl-warn-title { font-size: 13px; font-weight: 700; fill: #a3382f; }
+    .lbl-res { font-size: 10.5px; fill: #6a5a1e; }
+    .lbl-res-title { font-size: 12.5px; font-weight: 700; fill: #8a7415; }
+    .box-frame { fill: #ffffff; stroke: #9a9486; stroke-width: 1.5; }
+    .box-boundary { fill: none; stroke: #9a9486; stroke-width: 1.5; stroke-dasharray: 7 5; }
+    .box-data { fill: #e4eef8; stroke: #1d5d9b; stroke-width: 1.6; }
+    .box-exec { fill: #f7e9dd; stroke: #b5551f; stroke-width: 1.6; }
+    .box-strat { fill: #e7f1e9; stroke: #2f6b45; stroke-width: 2; }
+    .box-nested { fill: #ffffff; stroke: #b5551f; stroke-width: 1.2; stroke-dasharray: 4 3; }
+    .box-sim { fill: #fdf1e6; stroke: #b5551f; stroke-width: 1.8; }
+    .box-dead { fill: #eef0f2; stroke: #6f7580; stroke-width: 1.3; stroke-dasharray: 4 3; }
+    .box-warn { fill: #fbeeee; stroke: #a3382f; stroke-width: 1.4; stroke-dasharray: 3 3; }
+    .box-res { fill: #fbf6e3; stroke: #b39a2e; stroke-width: 1.4; stroke-dasharray: 4 3; }
+    .box-out { fill: #ffffff; stroke: #5b6270; stroke-width: 1.3; }
+    .oms-oval { fill: none; stroke: #b5551f; stroke-width: 1.2; stroke-dasharray: 2 5; opacity: 0.55; }
+    .edge-ink { stroke: #5b6270; fill: none; stroke-width: 1.6; }
+    .edge-data { stroke: #1d5d9b; fill: none; stroke-width: 2; }
+    .edge-exec { stroke: #b5551f; fill: none; stroke-width: 2; }
+    .edge-strat { stroke: #2f6b45; fill: none; stroke-width: 2; }
+    .edge-strat-dash { stroke: #2f6b45; fill: none; stroke-width: 1.8; stroke-dasharray: 6 5; }
+    .edge-missing { stroke: #6f7580; fill: none; stroke-width: 1.8; stroke-dasharray: 3 4; }
+    .edge-res-dash { stroke: #b39a2e; fill: none; stroke-width: 1.6; stroke-dasharray: 5 4; }
+    .textbg { fill: #fbfaf7; opacity: 0.97; }
+  </style>
+
+  <rect x="0" y="0" width="1900" height="1650" fill="#fbfaf7" />
+
+  <text class="title" x="950" y="34" text-anchor="middle">QTrade &#8212; As-Built Wiring, Expanded</text>
+  <text class="subtitle" x="950" y="54" text-anchor="middle">solid = fires every event &#183; dashed colour = once, at on_start &#183; dashed grey = once, at run end &#183; dashed gold = once, at startup</text>
+
+  <!-- inputs -->
+  <rect class="box-frame" x="40" y="80" width="190" height="46" rx="8" />
+  <text class="lbl-code" x="58" y="108">MCXScrips.bcp</text>
+  <rect class="box-frame" x="270" y="80" width="190" height="46" rx="8" />
+  <text class="lbl-code" x="288" y="108">Increment_capture.bin</text>
+
+  <line class="edge-ink" x1="135" y1="126" x2="245" y2="160" marker-end="url(#ah-ink)" />
+  <line class="edge-ink" x1="365" y1="126" x2="300" y2="160" marker-end="url(#ah-ink)" />
+
+  <rect class="box-frame" x="110" y="160" width="340" height="78" rx="8" />
+  <text class="lbl-title" x="280" y="186" text-anchor="middle">feed_replay :: decoder</text>
+  <text class="lbl-cap" x="280" y="204" text-anchor="middle">decode_message() -- every message, unfiltered</text>
+  <text class="lbl-cap" x="280" y="219" text-anchor="middle">load_refdata() -- that day's MCXScrips.bcp, once</text>
+
+  <line class="edge-ink" x1="280" y1="238" x2="280" y2="400" />
+
+  <!-- main.rs boundary -->
+  <rect class="box-boundary" x="40" y="250" width="1300" height="1100" rx="16" />
+  <text class="lbl-frame" x="900" y="270" text-anchor="middle">main.rs -- the orchestrator</text>
+  <line x1="60" y1="282" x2="1320" y2="282" stroke="#d7d3c8" stroke-width="1" />
+
+  <!-- instrument resolution, once at startup -->
+  <path class="edge-res-dash" d="M 400,238 L 400,290 L 650,290 L 650,296" marker-end="url(#ah-missing)" />
+  <rect class="textbg" x="415" y="282" width="200" height="14" />
+  <text class="lbl-res" x="418" y="292">that day's real InstrumentMaster</text>
+
+  <rect class="box-res" x="560" y="296" width="520" height="80" rx="8" />
+  <text class="lbl-res-title" x="820" y="316" text-anchor="middle">Instrument Resolution -- once, at startup</text>
+  <text class="lbl-code" x="820" y="334" text-anchor="middle" font-size="10">for name in Strategy::UNDERLYINGS: feed_replay::resolve_front_month(&amp;master, name)</text>
+  <text class="lbl-res" x="820" y="350" text-anchor="middle">&#8594; InstrumentFilter::from_native_ids(...) &#8212; feeds Cache's filter, below</text>
+  <text class="lbl-res" x="820" y="366" text-anchor="middle">&#8594; name_to_id map &#8212; backs ctx.resolve(name) later (main.rs:171-197)</text>
+
+  <!-- fan out (per real event, steady state) -->
+  <circle cx="280" cy="400" r="3.5" fill="#5b6270" />
+
+  <path class="edge-data" d="M 280,400 L 280,440 L 320,440 L 320,500" marker-end="url(#ah-data)" />
+  <rect class="textbg" x="140" y="426" width="130" height="16" />
+  <text class="lbl-edge lbl-edge-data" x="268" y="438" text-anchor="end">cache.apply(event)</text>
+
+  <path class="edge-exec" d="M 280,400 L 280,457 L 1020,457 L 1020,500" marker-end="url(#ah-exec)" />
+  <rect class="textbg" x="595" y="439" width="235" height="16" />
+  <text class="lbl-edge lbl-edge-exec" x="712" y="451" text-anchor="middle">engine.on_market_event(event)</text>
+  <rect class="textbg" x="855" y="439" width="175" height="16" />
+  <text class="lbl-cap" x="862" y="451">same event as cache.apply</text>
+
+  <!-- Cache -->
+  <rect class="box-data" x="90" y="500" width="460" height="180" rx="8" />
+  <text class="lbl-title" x="320" y="526" text-anchor="middle">Cache</text>
+  <text class="lbl-code" x="320" y="548" text-anchor="middle">InstrumentFilter</text>
+  <text class="lbl-cap" x="320" y="562" text-anchor="middle">gates: book existence (D32, every expiry, upfront)</text>
+  <text class="lbl-code" x="320" y="584" text-anchor="middle">BookBuilder</text>
+  <text class="lbl-cap" x="320" y="598" text-anchor="middle">the only thing that mutates a book -- real TBT feed only</text>
+  <rect class="box-dead" x="120" y="612" width="400" height="52" rx="6" />
+  <text class="lbl-code" x="320" y="632" text-anchor="middle" font-size="10.5">own_orders: OwnOrdersAndPositions</text>
+  <text class="lbl-cap" x="320" y="648" text-anchor="middle">declared, dead -- see callout &#8594;</text>
+
+  <!-- not-connected callout -->
+  <rect class="box-warn" x="655" y="500" width="125" height="180" rx="8" />
+  <text class="lbl-warn-title" x="717" y="522" text-anchor="middle" font-size="12">&#8856; not connected</text>
+  <text class="lbl-warn" x="717" y="544" text-anchor="middle">Cache and</text>
+  <text class="lbl-warn" x="717" y="558" text-anchor="middle">ExecutionEngine/</text>
+  <text class="lbl-warn" x="717" y="572" text-anchor="middle">SimExchange never</text>
+  <text class="lbl-warn" x="717" y="586" text-anchor="middle">talk (D10) -- both fed</text>
+  <text class="lbl-warn" x="717" y="600" text-anchor="middle">independently from</text>
+  <text class="lbl-warn" x="717" y="614" text-anchor="middle">the same event.</text>
+  <text class="lbl-warn" x="717" y="635" text-anchor="middle" font-size="9.5">own_orders exists in</text>
+  <text class="lbl-warn" x="717" y="649" text-anchor="middle" font-size="9.5">Cache but is dead --</text>
+  <text class="lbl-warn" x="717" y="663" text-anchor="middle" font-size="9.5">ctx reads Portfolio</text>
+  <text class="lbl-warn" x="717" y="677" text-anchor="middle" font-size="9.5">directly instead.</text>
+
+  <!-- Execution / OMS cluster -->
+  <rect class="oms-oval" x="772" y="486" width="496" height="398" rx="110" />
+  <text class="lbl-cap" x="1262" y="480" text-anchor="end" font-style="italic">"Execution / OMS", loosely</text>
+
+  <!-- ExecutionEngine: the go/no-go gate + accounting. No book of its own. -->
+  <rect class="box-exec" x="790" y="500" width="460" height="180" rx="8" />
+  <text class="lbl-title" x="1020" y="526" text-anchor="middle">ExecutionEngine</text>
+  <text class="lbl-cap" x="1020" y="544" text-anchor="middle">gates: RMS &#8594; validate &#8594; OTR -- go/no-go for strategy orders only</text>
+
+  <rect class="box-nested" x="800" y="560" width="215" height="100" rx="6" />
+  <text class="lbl-code" x="907" y="582" text-anchor="middle">Portfolio</text>
+  <text class="lbl-cap" x="907" y="598" text-anchor="middle">per-strategy SubAccount:</text>
+  <text class="lbl-cap" x="907" y="611" text-anchor="middle">position &#183; avg price &#183; PnL</text>
+  <text class="lbl-cap" x="907" y="628" text-anchor="middle" font-size="9">updated only from SimExchange's</text>
+  <text class="lbl-cap" x="907" y="640" text-anchor="middle" font-size="9">exec reports, below -- never direct</text>
+
+  <rect class="box-nested" x="1025" y="560" width="215" height="100" rx="6" />
+  <text class="lbl-code" x="1132" y="582" text-anchor="middle">CostModel</text>
+  <text class="lbl-cap" x="1132" y="598" text-anchor="middle">brokerage &#183; STT/CTT</text>
+  <text class="lbl-cap" x="1132" y="611" text-anchor="middle">stamp duty &#183; GST &#183; SEBI</text>
+  <text class="lbl-cap" x="1132" y="628" text-anchor="middle" font-size="9">-- taxation lives here, not</text>
+  <text class="lbl-cap" x="1132" y="640" text-anchor="middle" font-size="9">in the strategy</text>
+
+  <!-- the three real arrows between ExecutionEngine and its separate matching engine -->
+  <line class="edge-exec" x1="900" y1="680" x2="900" y2="760" marker-end="url(#ah-exec)" />
+  <rect class="textbg" x="640" y="698" width="248" height="16" />
+  <text class="lbl-edge lbl-edge-exec" x="886" y="710" text-anchor="end">submit() -- only if gates pass</text>
+
+  <line class="edge-exec" x1="1140" y1="680" x2="1140" y2="760" marker-end="url(#ah-exec)" />
+  <rect class="textbg" x="1152" y="698" width="270" height="16" />
+  <text class="lbl-edge lbl-edge-exec" x="1155" y="710">apply_market_event() -- always, no gate</text>
+
+  <line class="edge-exec" x1="1020" y1="760" x2="1020" y2="680" marker-end="url(#ah-exec)" />
+  <rect class="textbg" x="905" y="726" width="230" height="30" />
+  <text class="lbl-edge lbl-edge-exec" x="1020" y="738" text-anchor="middle">exec reports &#8594; handle_exec_reports()</text>
+  <text class="lbl-edge lbl-edge-exec" x="1020" y="751" text-anchor="middle">&#8594; Portfolio + CostModel, above</text>
+
+  <!-- SimExchange: a separate matching engine, not nested inside ExecutionEngine -->
+  <rect class="box-sim" x="790" y="760" width="460" height="110" rx="8" />
+  <text class="lbl-title" x="1020" y="784" text-anchor="middle">SimExchange</text>
+  <text class="lbl-cap" x="1020" y="802" text-anchor="middle">the real matching engine -- its own book, D10-independent</text>
+  <text class="lbl-cap" x="1020" y="816" text-anchor="middle">a concrete field today (venue: SimExchange) -- swapping to a real</text>
+  <text class="lbl-cap" x="1020" y="830" text-anchor="middle">venue means changing this field's type, not unplugging a box</text>
+  <text class="lbl-cap" x="1020" y="844" text-anchor="middle" font-style="italic">everything above this line depends only on its exec reports,</text>
+  <text class="lbl-cap" x="1020" y="856" text-anchor="middle" font-style="italic">never on how they were produced -- that's the mode-agnostic seam</text>
+
+  <!-- ExecutionEngine -> ControlDispatcher: still ExecutionEngine's own output, routed around SimExchange -->
+  <path class="edge-exec" d="M 790,650 L 785,650 L 785,920 L 790,920" marker-end="url(#ah-exec)" />
+  <rect class="textbg" x="560" y="850" width="145" height="16" />
+  <text class="lbl-edge lbl-edge-exec" x="705" y="862" text-anchor="end">returns ExecOutcome</text>
+
+  <!-- EventDispatcher -->
+  <rect class="box-data" x="90" y="920" width="460" height="140" rx="8" />
+  <text class="lbl-title" x="320" y="948" text-anchor="middle">EventDispatcher</text>
+  <text class="lbl-sub" x="320" y="966" text-anchor="middle">reads Cache's book, diffs, notifies -- never writes to it</text>
+  <text class="lbl-cap" x="320" y="984" text-anchor="middle">on_start &#183; on_book &#183; on_trade</text>
+  <text class="lbl-cap" x="320" y="1000" text-anchor="middle">gates: wakes only if subscribed (D25) --</text>
+  <text class="lbl-cap" x="320" y="1014" text-anchor="middle">ctx.book() access below is NOT gated by this</text>
+
+  <line class="edge-data" x1="320" y1="680" x2="320" y2="920" marker-end="url(#ah-data)" />
+  <rect class="textbg" x="330" y="791" width="215" height="16" />
+  <text class="lbl-edge lbl-edge-data" x="332" y="803">touched &#8594; on_book_touched()</text>
+
+  <!-- ControlDispatcher -->
+  <rect class="box-exec" x="790" y="920" width="460" height="140" rx="8" />
+  <text class="lbl-title" x="1020" y="948" text-anchor="middle">ControlDispatcher</text>
+  <text class="lbl-sub" x="1020" y="966" text-anchor="middle">delivers what ExecutionEngine just produced</text>
+  <text class="lbl-cap" x="1020" y="984" text-anchor="middle">on_fill &#183; on_order_update</text>
+  <text class="lbl-cap" x="1020" y="1000" text-anchor="middle">subscribe() takes &amp;mut EventDispatcher as a parameter,</text>
+  <text class="lbl-cap" x="1020" y="1014" text-anchor="middle">forwards, returns -- neither struct stores a link to the other</text>
+
+  <!-- Strategy box -->
+  <rect class="box-strat" x="1500" y="500" width="270" height="920" rx="12" />
+  <text class="lbl-title" x="1635" y="532" text-anchor="middle" font-size="16">Strategy</text>
+  <text class="lbl-code" x="1635" y="552" text-anchor="middle">impl Strategy</text>
+  <text class="lbl-cap" x="1635" y="570" text-anchor="middle">e.g. NaturalGasBracket</text>
+  <line x1="1520" y1="584" x2="1750" y2="584" stroke="#c9dccf" stroke-width="1" />
+  <text class="lbl-cap" x="1635" y="1370" text-anchor="middle">the one pluggable module --</text>
+  <text class="lbl-cap" x="1635" y="1386" text-anchor="middle">everything to its left is fixed</text>
+  <text class="lbl-cap" x="1635" y="1402" text-anchor="middle">engine code, shared by any strategy</text>
+
+  <!-- resolve (setup, dashed) -->
+  <path class="edge-strat-dash" d="M 1635,500 L 1635,145 L 400,145 L 400,160" marker-end="url(#ah-strat)" />
+  <rect class="textbg" x="790" y="131" width="220" height="16" />
+  <text class="lbl-edge lbl-edge-strat" x="900" y="143" text-anchor="middle">on_start: ctx.resolve(name)</text>
+  <rect class="textbg" x="1290" y="470" width="230" height="14" />
+  <text class="lbl-cap" x="1295" y="480">reads UNDERLYINGS directly -- no ctx call</text>
+
+  <!-- Lane A: EventDispatcher -> Strategy, on_book/on_trade -->
+  <path class="edge-data"
+        d="M 300,1060 L 300,1110
+           L 572,1110 C 572,1098 588,1098 588,1110
+           L 637,1110 C 637,1098 653,1098 653,1110
+           L 992,1110 C 992,1098 1008,1098 1008,1110
+           L 1262,1110 C 1262,1098 1278,1098 1278,1110
+           L 1287,1110 C 1287,1098 1303,1098 1303,1110
+           L 1500,1110"
+        marker-end="url(#ah-data)" />
+  <rect class="textbg" x="760" y="1090" width="190" height="16" />
+  <text class="lbl-edge lbl-edge-data" x="765" y="1102">on_book() / on_trade()</text>
+
+  <!-- Lane B: ControlDispatcher -> Strategy, on_fill/on_order_update -->
+  <path class="edge-exec"
+        d="M 1000,1060 L 1000,1155
+           L 1262,1155 C 1262,1143 1278,1143 1278,1155
+           L 1287,1155 C 1287,1143 1303,1143 1303,1155
+           L 1500,1155"
+        marker-end="url(#ah-exec)" />
+  <rect class="textbg" x="1015" y="1135" width="230" height="16" />
+  <text class="lbl-edge lbl-edge-exec" x="1020" y="1147">on_fill() / on_order_update()</text>
+
+  <!-- Lane C: Strategy -> ExecutionEngine, direct calls (writes + reads, one channel) -->
+  <path class="edge-strat"
+        d="M 1500,1205
+           L 1303,1205 C 1303,1193 1287,1193 1287,1205
+           L 1270,1205 L 1270,600 L 1250,600"
+        marker-end="url(#ah-strat)" />
+  <rect class="textbg" x="685" y="1164" width="470" height="34" />
+  <text class="lbl-edge lbl-edge-strat" x="690" y="1178">ctx.submit()/cancel()/modify() &#183; ctx.order()/position()/pnl() &#183; ctx.cost()</text>
+  <text class="lbl-edge lbl-edge-strat" x="690" y="1193" font-style="italic" font-size="9.5">direct Rust calls into ExecutionEngine -- writes: on_book/on_trade only &#183; reads: Portfolio/CostModel, any callback</text>
+
+  <!-- Lane E: Strategy -> Cache, reads -->
+  <path class="edge-strat"
+        d="M 1500,1260
+           L 1303,1260 C 1303,1248 1287,1248 1287,1260
+           L 653,1260 C 653,1248 637,1248 637,1260
+           L 580,1260 L 580,580 L 550,580"
+        marker-end="url(#ah-strat)" />
+  <rect class="textbg" x="845" y="1219" width="230" height="34" />
+  <text class="lbl-edge lbl-edge-strat" x="850" y="1233">ctx.book() / ctx.refdata()</text>
+  <text class="lbl-edge lbl-edge-strat" x="850" y="1247" font-style="italic" font-size="9.5">a borrow, not a message -- returns on the same line</text>
+
+  <!-- Lane F: Strategy -> ControlDispatcher, subscribe (setup, dashed) -->
+  <path class="edge-strat-dash" d="M 1500,1305 L 1295,1305 L 1295,940 L 1250,940" marker-end="url(#ah-strat)" />
+  <rect class="textbg" x="1305" y="1285" width="185" height="16" />
+  <text class="lbl-edge lbl-edge-strat" x="1310" y="1297" font-size="9.5">on_start: ctx.subscribe()</text>
+
+  <!-- Lane G: main.rs (after loop) -> Strategy, on_stop -->
+  <circle cx="700" cy="1350" r="3.5" fill="#6f7580" />
+  <text class="lbl-cap" x="700" y="1334" text-anchor="middle" font-style="italic">after replay loop ends</text>
+  <path class="edge-missing" d="M 700,1350 L 1500,1350" marker-end="url(#ah-missing)" />
+  <rect class="textbg" x="1000" y="1330" width="205" height="16" />
+  <text class="lbl-edge lbl-edge-missing" x="1005" y="1342">on_stop() -- once, run end</text>
+
+  <!-- Reporting: main.rs reads the same engine instance, once, after on_stop -->
+  <path class="edge-missing" d="M 800,870 L 800,880 L 793,880 C 793,868 777,868 777,880 L 645,880 L 645,1460" />
+  <rect class="textbg" x="440" y="1420" width="330" height="16" />
+  <text class="lbl-cap" x="445" y="1432" font-style="italic">after on_stop -- main.rs reads the same &amp;engine directly, no dispatcher involved</text>
+
+  <text x="560" y="1443" class="lbl-title" font-size="13">Reporting -- once, after the loop ends</text>
+
+  <circle cx="645" cy="1460" r="3.5" fill="#6f7580" />
+  <path class="edge-missing" d="M 645,1460 L 930,1480" marker-end="url(#ah-missing)" />
+  <path class="edge-missing" d="M 645,1460 L 1120,1480" marker-end="url(#ah-missing)" />
+  <path class="edge-missing" d="M 645,1460 L 1310,1480" marker-end="url(#ah-missing)" />
+
+  <rect class="box-out" x="850" y="1480" width="160" height="58" rx="8" />
+  <text class="lbl-code" x="930" y="1500" text-anchor="middle">orders.log</text>
+  <text class="lbl-cap" x="930" y="1516" text-anchor="middle">order-state transitions</text>
+  <text class="lbl-cap" x="930" y="1529" text-anchor="middle" font-size="9">engine.order_events()</text>
+
+  <rect class="box-out" x="1040" y="1480" width="160" height="58" rx="8" />
+  <text class="lbl-code" x="1120" y="1500" text-anchor="middle">fills.log</text>
+  <text class="lbl-cap" x="1120" y="1516" text-anchor="middle">every real fill</text>
+  <text class="lbl-cap" x="1120" y="1529" text-anchor="middle" font-size="9">engine.fills()</text>
+
+  <rect class="box-out" x="1230" y="1480" width="160" height="58" rx="8" />
+  <text class="lbl-code" x="1310" y="1500" text-anchor="middle">report.txt</text>
+  <text class="lbl-cap" x="1310" y="1516" text-anchor="middle">Tier 1 P&amp;L summary</text>
+  <text class="lbl-cap" x="1310" y="1529" text-anchor="middle" font-size="9">engine.tier1_report()</text>
+
+  <!-- legend -->
+  <line x1="60" y1="1580" x2="100" y2="1580" stroke="#1a1d23" stroke-width="2.4" />
+  <text x="112" y="1584" font-size="12">solid &#8212; fires every real event</text>
+
+  <line x1="400" y1="1580" x2="440" y2="1580" stroke="#2f6b45" stroke-width="2" stroke-dasharray="6 5" />
+  <text x="452" y="1584" font-size="12">dashed, green &#8212; real, but once (on_start)</text>
+
+  <line x1="840" y1="1580" x2="880" y2="1580" stroke="#b39a2e" stroke-width="2" stroke-dasharray="5 4" />
+  <text x="892" y="1584" font-size="12">dashed, gold &#8212; real, but once (startup, before any event)</text>
+
+  <line x1="1360" y1="1580" x2="1400" y2="1580" stroke="#6f7580" stroke-width="2" stroke-dasharray="3 4" />
+  <text x="1412" y="1584" font-size="12">dashed, grey &#8212; real, but once (run end)</text>
+
+  <text x="950" y="1611" text-anchor="middle" class="lbl-cap">
+    Reflects the codebase and this session's Q&amp;A as of 2026-08-26 &#183; cache.rs &#183; event_dispatcher.rs &#183; control_dispatcher.rs &#183; execution.rs &#183; strategy.rs &#183; main.rs:171-444
+  </text>
+  <text x="950" y="1627" text-anchor="middle" class="lbl-cap" font-style="italic">
+    SimExchange is drawn separately on purpose: everything above it is the same regardless of what fills orders -- the seam is real (D10),
+  </text>
+  <text x="950" y="1641" text-anchor="middle" class="lbl-cap" font-style="italic">
+    but "venue: SimExchange" is a concrete field today, not yet a trait a live connector could swap in without touching ExecutionEngine.
+  </text>
+
+</svg>

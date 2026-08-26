@@ -1,10 +1,17 @@
 [package]
-name = "mcx-decoder"
+name = "qtrade"
 version = "0.1.0"
 edition = "2021"
 
+# The one real entry point (2026-08-25: merged with the former
+# `backtester` bin -- see main.rs's own header and main_user_doc.md for
+# why. `main.rs` was frozen early as a decode-only CLI purely as a
+# concurrency-safety convention while T00-T07 were built in sequence;
+# that justification no longer applies, and ARCHITECTURE-DECISIONS.md
+# explicitly retires "backtester" as a system name in favor of one
+# qtrade). Invocation: `qtrade <config-file>` -- see config_user_doc.md.
 [[bin]]
-name = "mcx-decoder"
+name = "qtrade"
 path = "src/main.rs"
 
 # T03 (`book`)'s own FR-B11 validation harness -- not wired into the main
@@ -54,10 +61,11 @@ path = "src/simulator/validate.rs"
 name = "execution-validate"
 path = "src/execution/validate.rs"
 
-# A minimal demo strategy (not a real Strategy trait -- none exists yet,
-# see execution.rs/T07's own scope notes) proving the read-side pipeline
-# -- decoder -> cache (filter -> book -> dispatch) -- works end to end
-# against real MCX data. See dummy_strategy/dummy_strategy.md.
+# `feed_replay`'s own regression check (real, known-good price bands for
+# three real (instrument, day) pairs) -- same reason as book-validate/
+# cache-validate/etc. above (no [lib] target). See
+# feed_replay/feed_replay_user_doc.md.
 [[bin]]
-name = "dummy-strategy"
-path = "src/dummy_strategy/dummy_strategy.rs"
+name = "feed-replay-validate"
+path = "src/feed_replay/validate.rs"
+

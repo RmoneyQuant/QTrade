@@ -16,7 +16,6 @@
 //!   Never built ad hoc with `format!` scattered through calling code —
 //!   the type itself owns its own readable representation.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 /// Corrected after cross-checking against the real contract file: the
@@ -593,11 +592,11 @@ impl fmt::Display for DecodedMessage {
 /// This is the template-id dispatch table. Field offsets are commented
 /// with their source; see references/MCX_Feeder.h for the byte-exact
 /// struct definitions these were transcribed from.
-/// `pub`: `book`'s streaming validation harness reads outer/inner framing
-/// itself (per T03's streaming requirement -- see `book_user_doc.md`)
-/// rather than going through `decode_file`'s whole-file read, so it needs
-/// this per-message dispatch directly once it has sliced out one
-/// message's bytes.
+/// `pub`: every real consumer (`book`'s streaming validation harness,
+/// `feed_replay::replay`, `decode_messages` above) reads outer/inner
+/// framing itself and calls this per-message dispatch directly once it
+/// has sliced out one message's bytes -- this is the one real decoding
+/// entry point, shared by every mode.
 pub fn decode_message(template_id: u16, seq: u32, m: &[u8]) -> DecodedMessage {
     let len = m.len();
     match template_id {
@@ -714,20 +713,29 @@ pub fn decode_message(template_id: u16, seq: u32, m: &[u8]) -> DecodedMessage {
     }
 }
 
+/// The outer per-record framing, verified empirically against a real file
+/// (see README.md for why this needed checking -- the C++ reference
+/// code's literal description didn't match what these files actually
+/// contain):
+///
+///   [8 bytes]  u64 LE: length of what follows = 8 (timestamp) + payload_len
+///   [8 bytes]  i64 LE: local capture timestamp (monotonic-looking, NOT a
+///              wall-clock epoch value -- don't try to print it as a date)
+///   [payload_len bytes]: one or more EOBI messages back to back, each
+///              starting with a MessageHeader and advancing by body_len
+///
 /// The in-memory streaming API T02's follow-up asked for: decode every
-/// message in an already-loaded buffer, lazily, without printing.
-/// `decode_file` above still does its own thing (whole-file read, prints
-/// as it goes) for the CLI pilot -- unchanged. This is the second, purely
-/// additive entry point `book` (T03) builds its books from when it has
-/// (or wants) the whole buffer in memory; `book`'s own FR-B11 validation
+/// message in an already-loaded buffer, lazily, without printing. This
+/// is the entry point `book` (T03) builds its books from when it has (or
+/// wants) the whole buffer in memory; `book`'s own FR-B11 validation
 /// harness, working against files far bigger than comfortably fits in
 /// RAM, instead streams records directly off disk and calls
 /// `decode_message` per message itself -- see `book_user_doc.md`.
 pub fn decode_messages(data: &[u8]) -> impl Iterator<Item = DecodedMessage> + '_ {
     let mut pos = 0usize;
     // Outer iterator: one item per outer (packet) record, yielding the
-    // byte range of its payload and advancing `pos` past it -- same
-    // framing math as `decode_file`'s loop above.
+    // byte range of its payload and advancing `pos` past it, per the
+    // framing described above.
     std::iter::from_fn(move || {
         if pos + 16 > data.len() {
             return None;
@@ -765,82 +773,3 @@ pub fn decode_messages(data: &[u8]) -> impl Iterator<Item = DecodedMessage> + '_
     })
 }
 
-/// The outer per-record framing, verified empirically against a real file
-/// (see README.md for why this needed checking -- the C++ reference
-/// code's literal description didn't match what these files actually
-/// contain):
-///
-///   [8 bytes]  u64 LE: length of what follows = 8 (timestamp) + payload_len
-///   [8 bytes]  i64 LE: local capture timestamp (monotonic-looking, NOT a
-///              wall-clock epoch value -- don't try to print it as a date)
-///   [payload_len bytes]: one or more EOBI messages back to back, each
-///              starting with a MessageHeader and advancing by body_len
-pub struct Summary {
-    pub records: usize,
-    pub bytes_consumed: usize,
-    pub template_counts: BTreeMap<u16, u64>,
-}
-
-pub fn decode_file(data: &[u8], skip: usize, max_print: usize, debug: bool) -> Summary {
-    let mut pos = 0usize;
-    let mut record_no = 0usize;
-    let mut template_counts: BTreeMap<u16, u64> = BTreeMap::new();
-
-    while pos + 16 <= data.len() {
-        let length = u64_le(data, pos) as usize; // 8 (timestamp) + payload_len
-        let ts = i64_le(data, pos + 8);
-        if length < 8 {
-            eprintln!("bad record at offset {pos}: length field {length} < 8, stopping");
-            break;
-        }
-        let payload_len = length - 8;
-        let payload_start = pos + 16;
-        let payload_end = payload_start + payload_len;
-        if payload_end > data.len() {
-            eprintln!(
-                "truncated record at offset {pos}: need {payload_len} bytes, only {} available",
-                data.len() - payload_start
-            );
-            break;
-        }
-        let payload = &data[payload_start..payload_end];
-        let printing = record_no >= skip && record_no < skip + max_print;
-
-        if printing {
-            println!("[record {record_no}] offset={pos} capture_ts={ts} payload_len={payload_len}");
-        }
-
-        let mut off = 0usize;
-        while off + 8 <= payload.len() {
-            let body_len = u16_le(payload, off) as usize;
-            let template_id = u16_le(payload, off + 2);
-            let seq = u32_le(payload, off + 4);
-            if body_len == 0 || off + body_len > payload.len() {
-                if printing {
-                    println!("    [off {off}] body_len={body_len} -- stopping (malformed or end)");
-                }
-                break;
-            }
-            let msg = &payload[off..off + body_len];
-            *template_counts.entry(template_id).or_insert(0) += 1;
-            if printing {
-                let decoded = decode_message(template_id, seq, msg);
-                if debug {
-                    println!("    {decoded:?}");
-                } else {
-                    println!("    {decoded}");
-                }
-            }
-            off += body_len;
-        }
-
-        pos = payload_end;
-        record_no += 1;
-    }
-
-    Summary {
-        records: record_no,
-        bytes_consumed: pos,
-        template_counts,
-    }
-}

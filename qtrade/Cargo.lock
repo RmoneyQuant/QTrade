@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "mcx-decoder"
+name = "qtrade"
 version = "0.1.0"

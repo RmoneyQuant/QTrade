@@ -1,0 +1,357 @@
+<title>QTrade Dispatch Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --bg: #faf9f6;
+    --surface: #ffffff;
+    --surface-2: #f1efe9;
+    --ink: #20242b;
+    --ink-dim: #565f6c;
+    --line: #d7d3c8;
+    --line-strong: #b6b1a2;
+
+    --data: #1d5d9b;
+    --data-soft: #e4eef8;
+    --exec: #b5551f;
+    --exec-soft: #f7e9dd;
+    --strat: #2f6b45;
+    --strat-soft: #e7f1e9;
+    --missing: #8a8f98;
+    --missing-soft: #eef0f2;
+
+    --code-bg: #edeae2;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14161a;
+      --surface: #1b1e24;
+      --surface-2: #22262d;
+      --ink: #eceef1;
+      --ink-dim: #9aa1ab;
+      --line: #383d46;
+      --line-strong: #4c525d;
+
+      --data: #6fa8dc;
+      --data-soft: #1c2b3b;
+      --exec: #e08a4f;
+      --exec-soft: #362819;
+      --strat: #7bc292;
+      --strat-soft: #1b2f21;
+      --missing: #7a808a;
+      --missing-soft: #24272c;
+
+      --code-bg: #22262d;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14161a;
+    --surface: #1b1e24;
+    --surface-2: #22262d;
+    --ink: #eceef1;
+    --ink-dim: #9aa1ab;
+    --line: #383d46;
+    --line-strong: #4c525d;
+
+    --data: #6fa8dc;
+    --data-soft: #1c2b3b;
+    --exec: #e08a4f;
+    --exec-soft: #362819;
+    --strat: #7bc292;
+    --strat-soft: #1b2f21;
+    --missing: #7a808a;
+    --missing-soft: #24272c;
+
+    --code-bg: #22262d;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 48px 24px 80px;
+    line-height: 1.55;
+  }
+  h1 {
+    font-family: "IBM Plex Sans", sans-serif;
+    font-weight: 700;
+    font-size: 1.9rem;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 0 0 6px;
+  }
+  .kicker {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    margin: 0 0 14px;
+  }
+  .lede {
+    max-width: 66ch;
+    color: var(--ink-dim);
+    font-size: 1rem;
+    margin: 0 0 8px;
+  }
+  code {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.9em;
+    background: var(--code-bg);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+  }
+
+  .corrections {
+    margin: 22px 0 34px;
+    padding: 16px 20px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    font-size: 0.92rem;
+  }
+  .corrections h2 {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--ink-dim);
+    margin: 0 0 10px;
+    font-weight: 600;
+  }
+  .corrections ul { margin: 0; padding-left: 1.2em; }
+  .corrections li { margin: 6px 0; }
+  .corrections li::marker { color: var(--ink-dim); }
+
+  figure { margin: 36px 0 8px; }
+  .diagram-frame {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 18px;
+    overflow-x: auto;
+  }
+  svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+  figcaption {
+    margin-top: 12px;
+    font-size: 0.88rem;
+    color: var(--ink-dim);
+    max-width: 74ch;
+  }
+
+  /* --- diagram tokens --- */
+  .box-frame { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.5; }
+  .box-boundary { fill: none; stroke: var(--line-strong); stroke-width: 1.5; stroke-dasharray: 7 5; }
+  .box-data { fill: var(--data-soft); stroke: var(--data); stroke-width: 1.6; }
+  .box-exec { fill: var(--exec-soft); stroke: var(--exec); stroke-width: 1.6; }
+  .box-strat { fill: var(--strat-soft); stroke: var(--strat); stroke-width: 2; }
+  .box-nested { fill: var(--surface); stroke: var(--exec); stroke-width: 1.2; stroke-dasharray: 4 3; }
+
+  text { font-family: "IBM Plex Sans", sans-serif; fill: var(--ink); }
+  .lbl-title { font-weight: 700; font-size: 15px; }
+  .lbl-sub { font-size: 11.5px; fill: var(--ink-dim); }
+  .lbl-code { font-family: "IBM Plex Mono", monospace; font-size: 11px; }
+  .lbl-edge { font-family: "IBM Plex Mono", monospace; font-size: 11px; }
+  .lbl-edge-data { fill: var(--data); }
+  .lbl-edge-exec { fill: var(--exec); }
+  .lbl-edge-strat { fill: var(--strat); }
+  .lbl-edge-missing { fill: var(--missing); font-style: italic; }
+  .lbl-frame { font-family: "IBM Plex Mono", monospace; font-size: 12px; fill: var(--ink-dim); letter-spacing: 0.02em; }
+  .lbl-caption { font-size: 10.5px; fill: var(--ink-dim); }
+
+  .edge-data { stroke: var(--data); fill: none; stroke-width: 2; }
+  .edge-exec { stroke: var(--exec); fill: none; stroke-width: 2; }
+  .edge-strat-live { stroke: var(--strat); fill: none; stroke-width: 2; }
+  .edge-setup { fill: none; stroke-width: 1.75; stroke-dasharray: 6 5; }
+  .edge-missing { fill: none; stroke: var(--missing); stroke-width: 1.75; stroke-dasharray: 3 4; }
+
+  .textbg { fill: var(--surface); opacity: 0.92; }
+
+  .legend {
+    margin-top: 28px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 10px 24px;
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 10px; }
+  .legend-swatch { width: 34px; height: 0; border-top-width: 3px; border-top-style: solid; flex-shrink: 0; }
+  .sw-live { border-color: var(--ink); }
+  .sw-setup { border-color: var(--ink); border-top-style: dashed; }
+  .sw-missing { border-color: var(--missing); border-top-style: dashed; }
+
+  footer {
+    margin-top: 40px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    font-size: 0.82rem;
+    color: var(--ink-dim);
+  }
+</style>
+
+<p class="kicker">qtrade &middot; backtest engine &middot; 2026-08-25</p>
+<h1>The Dispatch Loop, As Built</h1>
+<p class="lede">
+  Everything inside the dashed boundary is <code>main.rs</code>'s own code — one process,
+  one thread, shared by every strategy. Everything outside it is
+  <code>LimitOrderBookGenerator</code>, the one pluggable module today. Solid arrows fire on
+  every real event; dashed colored arrows fire once, during <code>on_start</code>; dashed
+  grey arrows don't exist in the code yet.
+</p>
+
+<div class="corrections">
+  <h2>Corrected from the first request</h2>
+  <ul>
+    <li><strong>Strategy &rarr; Execution Algo</strong> isn't real traffic yet — no strategy can submit an order (<code>ctx.submit()</code> doesn't exist). Drawn dashed grey, labelled honestly.</li>
+    <li><strong>Execution Algo &rarr; Strategy, labelled <code>control_dispatcher</code></strong> — right label, but not a direct arrow. It's <code>ExecutionEngine</code> &rarr; <code>main.rs</code> &rarr; <code>ControlDispatcher.dispatch()</code> &rarr; Strategy. Drawn as that full chain.</li>
+    <li><strong>Strategy &rarr; filter / feed_replay at start</strong> — real, but indirect: <code>on_start</code> calls <code>ctx.resolve()</code>, which reads a lookup <code>main.rs</code> already built from <code>feed_replay::resolve_front_month</code> before the strategy existed. Drawn as a setup-time arrow into that lookup, not a live call.</li>
+  </ul>
+</div>
+
+<figure>
+  <div class="diagram-frame">
+    <svg viewBox="0 0 1560 900" role="img" aria-label="qtrade's dispatch architecture: main.rs feeds each decoded event independently to Cache/EventDispatcher and to ExecutionEngine/SimExchange; EventDispatcher and ControlDispatcher call the Strategy's MarketHandler and ControlHandler; the Strategy's on_start subscribes back through ControlDispatcher and resolves names through a lookup main.rs built at setup; order submission from the strategy does not exist yet.">
+
+      <defs>
+        <marker id="ah-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--data)" />
+        </marker>
+        <marker id="ah-exec" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--exec)" />
+        </marker>
+        <marker id="ah-strat" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--strat)" />
+        </marker>
+        <marker id="ah-missing" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--missing)" />
+        </marker>
+      </defs>
+
+      <!-- config -->
+      <rect class="box-frame" x="40" y="24" width="190" height="46" rx="8" />
+      <text class="lbl-code" x="60" y="52">config.toml</text>
+
+      <line class="edge-data" x1="135" y1="70" x2="135" y2="98" marker-end="url(#ah-data)" />
+
+      <!-- main.rs boundary -->
+      <rect class="box-boundary" x="40" y="100" width="1000" height="660" rx="16" />
+      <text class="lbl-frame" x="62" y="128">main.rs — the orchestrator (one process, one thread, every strategy shares this)</text>
+      <line x1="60" y1="140" x2="1020" y2="140" stroke="var(--line)" stroke-width="1" />
+
+      <!-- feed_replay -->
+      <rect class="box-frame" x="350" y="160" width="380" height="72" rx="8" />
+      <text class="lbl-title" x="540" y="186" text-anchor="middle">feed_replay :: decoder</text>
+      <text class="lbl-caption" x="540" y="203" text-anchor="middle">decode_message() — one call per wire message</text>
+      <text class="lbl-caption" x="540" y="218" text-anchor="middle">resolve_front_month() — once, before the loop starts</text>
+
+      <!-- Cache -->
+      <rect class="box-data" x="90" y="272" width="400" height="82" rx="8" />
+      <text class="lbl-title" x="290" y="300" text-anchor="middle">Cache</text>
+      <text class="lbl-sub" x="290" y="318" text-anchor="middle">Filter + BookBuilder — the read model</text>
+      <text class="lbl-caption" x="290" y="336" text-anchor="middle">cache.rs</text>
+
+      <!-- ExecutionEngine -->
+      <rect class="box-exec" x="570" y="272" width="420" height="172" rx="8" />
+      <text class="lbl-title" x="780" y="298" text-anchor="middle">ExecutionEngine</text>
+      <text class="lbl-sub" x="780" y="316" text-anchor="middle">the &#8220;Execution Algo&#8221; — gates, cost, accounting</text>
+
+      <rect class="box-nested" x="650" y="352" width="260" height="70" rx="6" />
+      <text class="lbl-code" x="780" y="378" text-anchor="middle">SimExchange</text>
+      <text class="lbl-caption" x="780" y="394" text-anchor="middle">its own book — never reads Cache (D10)</text>
+      <text class="lbl-caption" x="780" y="408" text-anchor="middle">apply_market_event() &#8596; ExecReports</text>
+
+      <!-- EventDispatcher -->
+      <rect class="box-data" x="90" y="474" width="400" height="106" rx="8" />
+      <text class="lbl-title" x="290" y="502" text-anchor="middle">EventDispatcher</text>
+      <text class="lbl-sub" x="290" y="520" text-anchor="middle">MarketHandler: on_start &middot; on_book &middot; on_trade</text>
+      <text class="lbl-caption" x="290" y="538" text-anchor="middle">event_dispatcher.rs</text>
+
+      <!-- ControlDispatcher -->
+      <rect class="box-exec" x="570" y="474" width="420" height="106" rx="8" />
+      <text class="lbl-title" x="780" y="502" text-anchor="middle">ControlDispatcher</text>
+      <text class="lbl-sub" x="780" y="520" text-anchor="middle">ControlHandler: on_fill &middot; on_order_update</text>
+      <text class="lbl-caption" x="780" y="538" text-anchor="middle">control_dispatcher.rs</text>
+
+      <!-- per-event arrows: feed_replay fan-out -->
+      <path class="edge-data" d="M 450,232 L 350,272" marker-end="url(#ah-data)" />
+      <rect class="textbg" x="318" y="238" width="150" height="16" />
+      <text class="lbl-edge lbl-edge-data" x="393" y="250" text-anchor="middle">cache.apply(event)</text>
+
+      <path class="edge-exec" d="M 630,232 L 730,272" marker-end="url(#ah-exec)" />
+      <rect class="textbg" x="690" y="238" width="190" height="16" />
+      <text class="lbl-edge lbl-edge-exec" x="785" y="250" text-anchor="middle">engine.on_market_event()</text>
+
+      <!-- Cache -> EventDispatcher -->
+      <path class="edge-data" d="M 290,354 L 290,474" marker-end="url(#ah-data)" />
+      <rect class="textbg" x="298" y="404" width="190" height="16" />
+      <text class="lbl-edge lbl-edge-data" x="298" y="416">touched &#8594; on_book_touched()</text>
+
+      <!-- ExecutionEngine -> ControlDispatcher -->
+      <path class="edge-exec" d="M 780,444 L 780,474" marker-end="url(#ah-exec)" />
+      <rect class="textbg" x="792" y="450" width="230" height="16" />
+      <text class="lbl-edge lbl-edge-exec" x="792" y="462">returns ExecOutcome{fills, order_events}</text>
+
+      <!-- ControlDispatcher forwards subscribe into EventDispatcher -->
+      <path class="edge-setup" stroke="var(--exec)" d="M 570,560 L 490,560" marker-end="url(#ah-exec)" />
+      <rect class="textbg" x="493" y="552" width="80" height="14" />
+      <text class="lbl-edge lbl-edge-exec" x="497" y="563" font-size="9.5">forwards</text>
+
+      <!-- Strategy box (outside main.rs) -->
+      <rect class="box-strat" x="1130" y="330" width="380" height="300" rx="12" />
+      <text class="lbl-title" x="1320" y="362" text-anchor="middle">Strategy</text>
+      <text class="lbl-sub" x="1320" y="380" text-anchor="middle">LimitOrderBookGenerator — the pluggable module</text>
+      <rect class="box-frame" x="1155" y="398" width="150" height="30" rx="15" />
+      <text class="lbl-code" x="1230" y="418" text-anchor="middle" font-size="10.5">impl MarketHandler</text>
+      <rect class="box-frame" x="1315" y="398" width="160" height="30" rx="15" />
+      <text class="lbl-code" x="1395" y="418" text-anchor="middle" font-size="10.5">impl ControlHandler</text>
+      <text class="lbl-caption" x="1320" y="600" text-anchor="middle">on_book/on_trade: write feed.csv rows</text>
+      <text class="lbl-caption" x="1320" y="614" text-anchor="middle">on_fill/on_order_update: left at trait default</text>
+
+      <!-- EventDispatcher -> Strategy (on_book/on_trade), routed along bottom lane -->
+      <path class="edge-data" d="M 490,527 L 1030,527 L 1030,470 L 1130,435" fill="none" marker-end="url(#ah-data)" />
+      <rect class="textbg" x="700" y="519" width="180" height="16" />
+      <text class="lbl-edge lbl-edge-data" x="700" y="531">on_book() / on_trade()</text>
+
+      <!-- ControlDispatcher -> Strategy (on_fill/on_order_update) -->
+      <path class="edge-exec" d="M 990,505 L 1130,475" marker-end="url(#ah-exec)" />
+      <rect class="textbg" x="1000" y="480" width="120" height="14" />
+      <text class="lbl-edge lbl-edge-exec" x="1002" y="490" font-size="9.5">on_fill() / on_order_update()</text>
+
+      <!-- Strategy -> ControlDispatcher: ctx.subscribe(), setup, dashed -->
+      <path class="edge-setup" stroke="var(--strat)" d="M 1130,555 L 990,545" marker-end="url(#ah-strat)" />
+      <rect class="textbg" x="1005" y="548" width="150" height="14" />
+      <text class="lbl-edge lbl-edge-strat" x="1008" y="558" font-size="9.5">on_start: ctx.subscribe()</text>
+
+      <!-- Strategy -> feed_replay: ctx.resolve(), setup, dashed, routed above the box -->
+      <path class="edge-setup" stroke="var(--strat)" d="M 1280,330 L 1280,88 L 620,88 L 620,160" fill="none" marker-end="url(#ah-strat)" />
+      <rect class="textbg" x="820" y="80" width="200" height="16" />
+      <text class="lbl-edge lbl-edge-strat" x="920" y="92" text-anchor="middle">on_start: ctx.resolve(name)</text>
+      <rect class="textbg" x="1150" y="298" width="270" height="14" />
+      <text class="lbl-edge-missing lbl-edge" x="1152" y="308" font-size="9.5">(reads the lookup main.rs built at setup)</text>
+
+      <!-- Strategy -> ExecutionEngine: ctx.submit(), missing -->
+      <path class="edge-missing" d="M 1130,600 L 990,420" marker-end="url(#ah-missing)" />
+      <rect class="textbg" x="1000" y="560" width="150" height="16" />
+      <text class="lbl-edge lbl-edge-missing" x="1002" y="572">ctx.submit() — not built</text>
+
+    </svg>
+  </div>
+  <figcaption>
+    Every decoded event reaches <code>Cache</code> and <code>ExecutionEngine</code> independently and in parallel — they never call each other (D10). <code>EventDispatcher</code> and <code>ControlDispatcher</code> are the only two paths out to strategy code; both are real and tested. The strategy's own outgoing calls (green, dashed) all happen once, inside <code>on_start</code> — nothing in this codebase lets a strategy act after that except by reacting to a callback.
+  </figcaption>
+</figure>
+
+<div class="legend">
+  <div class="legend-item"><span class="legend-swatch sw-live"></span> solid — real, fires on every event</div>
+  <div class="legend-item"><span class="legend-swatch sw-setup"></span> dashed, colored — real, but only once (<code>on_start</code>)</div>
+  <div class="legend-item"><span class="legend-swatch sw-missing"></span> dashed, grey — no code path exists yet</div>
+</div>
+
+<footer>
+  Reflects the codebase as of 2026-08-25 (Phase A + Phase B: <code>event_dispatcher</code>, <code>control_dispatcher</code>, <code>ControlHandler</code>). Component docs: <code>event_dispatcher_user_doc.md</code>, <code>control_dispatcher_user_doc.md</code>, <code>main_user_doc.md</code>.
+</footer>

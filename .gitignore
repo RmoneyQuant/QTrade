@@ -27,3 +27,6 @@ npm-debug.log*
 # Editors
 .vscode/
 .idea/
+
+# logs
+./qtrade/logs
