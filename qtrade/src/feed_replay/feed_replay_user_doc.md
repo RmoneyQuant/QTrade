@@ -17,7 +17,22 @@ Split out of `dummy_strategy.rs` on 2026-08-24. That file used to do CLI/locatio
 - `resolve_front_month(master, underlying) -> Option<InstrumentId>` — resolves a name (e.g. `"CRUDEOIL"`) to that day's real front-month future token. A strategy declares names, never tokens (see e.g. `limit_order_book_generator.rs`'s `UNDERLYINGS`).
 - `snapshot_path_for(capture_path) -> Option<String>` — the paired `snapshot_capture` file's path for an `Increment_capture` file, or `None` if it isn't one.
 - `scan_snapshot_for_bands(path, tracked_ids) -> io::Result<HashMap<InstrumentId, (lower_raw, upper_raw, count)>>` — see §3.
-- `replay(capture_path, max_outer_records, on_event)` — streams the capture file record by record, decodes every message, and calls `on_event(ReplayEvent { event, seq_no, now_ns, packet_transact_time_ns })` for each one. Owns all outer/inner wire framing; a caller never touches raw bytes.
+- `replay(capture_path, max_outer_records, on_event)` — streams the capture file record by record, decodes every message, and calls `on_event(ReplayEvent { event, seq_no, exchange_ts, recorder_ts })` for each one. Owns all outer/inner wire framing; a caller never touches raw bytes.
+
+## 2a. Two real clocks now, no synthetic one (dual-clock replay, 2026-08-27)
+
+`ReplayEvent` used to carry a synthetic `now_ns` (`+= 1_000` per message, unrelated to real time) plus the exchange's own `packet_transact_time_ns`. Both fields are gone; in their place, `exchange_ts` and `recorder_ts` are **both real**, straight from the capture file:
+
+- **`exchange_ts`** — `PacketHeader.TransactTime` (template 13003), unchanged source, just renamed for symmetry with `recorder_ts`.
+- **`recorder_ts`** — the outer record's own second header field (`[8B length][8B local capture timestamp]`), decoded by `RecordSource::next_record` and handed back for real for the first time. It was always there; it was read into a local buffer and discarded, every record, since this project's first day. `main.rs` is what actually schedules two deliveries of the same event from these two numbers (`SimExchange` at `exchange_ts`, `Cache`/`Strategy` at `recorder_ts`) — see `main_user_doc.md` and `scheduler_user_doc.md`.
+
+**Why this matters, concretely: `recorder_ts - exchange_ts` is real, measured feed latency**, not a modeled distribution — a read-only check against `19_08_2026`'s real data (500,000 packets) showed a clean, always-positive shape (p50 ≈ 2.5ms, p99 ≈ 14.3ms, max ≈ 59.4ms).
+
+### The pitfall this file's own callers must not repeat
+
+**MCX capture files recorded before ~2026-08-20 can contain a negative `recorder_ts - exchange_ts` delta**, and `main.rs`'s own hard-failure check (D20 fail-fast, never clamped) will stop the run the moment it finds one. This is not this module's bug and not a reason to loosen that check — it's a real fact about the recording rig: two physical servers (`192.168.xx.11`/`192.168.xx.7`) capture in parallel, a monitoring script substitutes a row from the other server on certain errors, and **the two servers' clocks were not NTP-synced to the same reference until ~2026-08-20** (one pointed at an AWS time source, the other at India NPL, before that). A substituted row from the "other" clock, right at a boundary, is enough to produce a small (tens to low-hundreds of nanoseconds) negative reading — confirmed for real: `19_08_2026`'s own file hit exactly this, `-135ns`, about a fifth of the way through the session.
+
+**Pick a capture day at or after `21_08_2026`** for anything exercising the dual-clock replay against real data. `21_08_2026` itself is verified clean (zero negative deltas across a 60-million-record real scan) and is what `naturalgas_bracket`'s own real run now uses — see `naturalgas_bracket.md`. This isn't a property `feed_replay.rs` can detect or fix on its own (it has no way to know which side of the sync date a given file falls on); it's stated here so the next person picking a day for a real run doesn't have to rediscover it by hitting the same fail-fast.
 
 ## 3. The price-band pre-scan, and why it exists
 

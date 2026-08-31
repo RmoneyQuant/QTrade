@@ -41,6 +41,31 @@
 //! constructed it (`take_outcome`), for that dispatcher to forward to
 //! `control_dispatcher::ControlDispatcher::dispatch` itself.
 //!
+//! ## `submit`/`cancel`/`modify` are synchronous again (2026-08-27,
+//! reversing part of the dual-clock replay pass)
+//!
+//! The dual-clock pass (earlier the same broad effort) made `Ctx` gate
+//! locally then *schedule* the actual venue call for `latency_ns` later,
+//! via `scheduler::Scheduler` and a `RunHandles`/`PendingVenueOp` pair
+//! this file used to define. Reconsidered directly: that put the
+//! decision to *delay sending* in strategy-facing code (`Ctx`), which a
+//! live strategy never does -- a real OMS fires the order the instant its
+//! own gates clear; the round-trip time is the network and the exchange,
+//! entirely outside our own code's control, not a wait our own code
+//! chooses. `Ctx::submit`/`cancel`/`modify` now call all the way through
+//! to `SimExchange` in the same instant the local gates pass -- `Ctx`
+//! holds `&mut SimExchange` directly, no `Scheduler` reference at all.
+//! The delay a real ~500μs MCX order-entry round trip should model now
+//! lives entirely inside `simulator::SimExchange` itself (`with_order_
+//! latency`) -- the one component that's genuinely different between
+//! backtest and live (swapped for a real CTCL/ETI link), so it's the
+//! only place a "how long until the venue answers" concept should exist.
+//! `scheduler::Scheduler`'s own `OrderArrival`/`ReportDelivery` variants
+//! are unaffected by this reversal (still real, still tested by
+//! `scheduler.rs`'s own suite) -- they simply have no caller here again,
+//! the same honest status they had before the dual-clock pass gave them
+//! one.
+//!
 //! ## Scope (deliberately out, still)
 //!
 //! Submitting from `on_fill`/`on_order_update` (see above). `ctx.cancel_all`/
@@ -90,7 +115,7 @@ use crate::decoder::Trade;
 use crate::event_dispatcher::{Depth, EventDispatcher, SubscriberId};
 use crate::execution::{Cost, ExecOutcome, ExecutionEngine, FillRecord, GateOutcome, NewOrderIntent, Order, OrderEventRecord, StrategyId};
 use crate::refdata::InstrumentMaster;
-use crate::simulator::OrderType;
+use crate::simulator::{OrderType, SimExchange};
 use crate::types::{BookState, InstrumentId, Lots, Price, Qty, Side, Venue};
 
 /// Only one strategy is ever compiled into `main.rs` today (see
@@ -125,6 +150,15 @@ pub struct Pnl {
 pub struct Ctx<'a> {
     cache: &'a Cache,
     engine: &'a mut ExecutionEngine,
+    /// Mutable now (2026-08-27, "send as fast as possible, the delay
+    /// belongs to the venue"): `submit`/`cancel`/`modify` call all the
+    /// way through to the venue in the same instant the local gates
+    /// pass, no scheduled hop in between. Whether the strategy actually
+    /// learns anything *from this specific call* still depends entirely
+    /// on `SimExchange`'s own internal transit delay -- see
+    /// `simulator::SimExchange::with_order_latency`'s doc comment -- but
+    /// that delay is the venue's business now, invisible from here.
+    venue: &'a mut SimExchange,
     now_ns: u64,
     strategy_id: StrategyId,
     can_submit: bool,
@@ -133,13 +167,18 @@ pub struct Ctx<'a> {
     /// callback returns, so whichever dispatcher constructed this `Ctx`
     /// can forward it to `ControlDispatcher::dispatch` for real
     /// delivery. Never read by the strategy itself (see this file's
-    /// header: writes return only an acknowledgment).
+    /// header: writes return only an acknowledgment). Since the venue
+    /// call is now synchronous (2026-08-27), this can carry a genuine
+    /// fill/reject for the order just submitted *and/or* a report for
+    /// some earlier order whose own transit delay happened to elapse in
+    /// the same call (`SimExchange::drain_due`) -- both delivered the
+    /// same way, through `on_fill`/`on_order_update`, never inline here.
     pending: ExecOutcome,
 }
 
 impl<'a> Ctx<'a> {
-    pub fn new(cache: &'a Cache, engine: &'a mut ExecutionEngine, now_ns: u64, strategy_id: StrategyId, can_submit: bool) -> Self {
-        Ctx { cache, engine, now_ns, strategy_id, can_submit, pending: ExecOutcome::default() }
+    pub fn new(cache: &'a Cache, engine: &'a mut ExecutionEngine, venue: &'a mut SimExchange, now_ns: u64, strategy_id: StrategyId, can_submit: bool) -> Self {
+        Ctx { cache, engine, venue, now_ns, strategy_id, can_submit, pending: ExecOutcome::default() }
     }
 
     /// Full book access, exactly as `Cache::book` already provides --
@@ -203,40 +242,59 @@ impl<'a> Ctx<'a> {
     /// fill data, even for an instant fill (see this file's header): any
     /// fills/order-events this produces are accumulated into `pending`
     /// and delivered later, through `on_fill`/`on_order_update`.
+    ///
+    /// **Send as fast as possible; the venue owns the delay (2026-08-27,
+    /// reversing the dual-clock pass's own `OrderArrival`-scheduling
+    /// design).** Runs the local gates (`submit_order_local`) and, if
+    /// they pass, calls `deliver_order` in the very same instant --
+    /// exactly what a live OMS would do (fire the real order the moment
+    /// its own risk checks clear; the network and the exchange are what
+    /// take time, not our own code choosing to wait). On `Denied`,
+    /// that's the whole story (a denied order never reaches the venue at
+    /// all, D36). Whether this call's own `deliver_order` produces
+    /// anything visible *right now* is entirely `SimExchange`'s call --
+    /// see `simulator::SimExchange::with_order_latency`'s own doc
+    /// comment for how a real ~500μs MCX order-entry delay is modelled
+    /// without `Ctx`/`ExecutionEngine` ever knowing about it.
     pub fn submit(&mut self, instrument: InstrumentId, side: Side, order_type: OrderType, qty: Lots) -> Result<u64, CtxError> {
         if !self.can_submit {
             return Err(CtxError::SubmitNotAllowedHere);
         }
         let intent = NewOrderIntent { strategy_id: self.strategy_id, instrument, side, order_type, qty };
-        let (outcome, exec) = self.engine.submit_order(intent, self.now_ns);
+        let (outcome, req, exec) = self.engine.submit_order_local(intent, self.now_ns, self.venue);
         self.pending.fills.extend(exec.fills);
         self.pending.order_events.extend(exec.order_events);
-        Ok(match outcome {
+        let client_order_id = match outcome {
             GateOutcome::Submitted { client_order_id } => client_order_id,
             GateOutcome::Denied { client_order_id, .. } => client_order_id,
-        })
+        };
+        if let Some(req) = req {
+            let exec = self.engine.deliver_order(req, self.now_ns, self.venue);
+            self.pending.fills.extend(exec.fills);
+            self.pending.order_events.extend(exec.order_events);
+        }
+        Ok(client_order_id)
     }
 
-    /// Cancels an order -- both real phases (`request_cancel` then
-    /// `deliver_cancel_to_venue`) run immediately, one after the other:
-    /// no latency model exists anywhere in this codebase yet (a
-    /// deliberate, project-wide deferral -- "our setup is a money
-    /// printer at this phase"), so there is no real delay for a second
-    /// phase to wait through.
+    /// Cancels an order -- same immediate, synchronous shape as `submit`
+    /// (2026-08-27). Nothing is delivered if the order wasn't open to
+    /// begin with (`request_cancel` returns `false` -- nothing to send).
     pub fn cancel(&mut self, client_order_id: u64) -> Result<(), CtxError> {
         if !self.can_submit {
             return Err(CtxError::SubmitNotAllowedHere);
         }
-        let (_, e1) = self.engine.request_cancel(client_order_id, self.now_ns);
-        let e2 = self.engine.deliver_cancel_to_venue(client_order_id, self.now_ns);
+        let (ok, e1) = self.engine.request_cancel(client_order_id, self.now_ns);
         self.pending.fills.extend(e1.fills);
         self.pending.order_events.extend(e1.order_events);
-        self.pending.fills.extend(e2.fills);
-        self.pending.order_events.extend(e2.order_events);
+        if ok {
+            let e2 = self.engine.deliver_cancel_to_venue(client_order_id, self.now_ns, self.venue);
+            self.pending.fills.extend(e2.fills);
+            self.pending.order_events.extend(e2.order_events);
+        }
         Ok(())
     }
 
-    /// Modifies an order -- same two-phase-but-immediate reasoning as
+    /// Modifies an order -- same immediate, synchronous shape as
     /// `cancel`. "So `ctx.modify(id, new_qty)` to shrink a quote keeps
     /// your place in the queue" (`STRATEGY-GUIDE.md` §6) -- real once
     /// this pass lands, not just documented intent.
@@ -244,12 +302,14 @@ impl<'a> Ctx<'a> {
         if !self.can_submit {
             return Err(CtxError::SubmitNotAllowedHere);
         }
-        let (_, e1) = self.engine.request_modify(client_order_id, self.now_ns);
-        let e2 = self.engine.deliver_modify_to_venue(client_order_id, new_qty, new_price, self.now_ns);
+        let (ok, e1) = self.engine.request_modify(client_order_id, self.now_ns);
         self.pending.fills.extend(e1.fills);
         self.pending.order_events.extend(e1.order_events);
-        self.pending.fills.extend(e2.fills);
-        self.pending.order_events.extend(e2.order_events);
+        if ok {
+            let e2 = self.engine.deliver_modify_to_venue(client_order_id, new_qty, new_price, self.now_ns, self.venue);
+            self.pending.fills.extend(e2.fills);
+            self.pending.order_events.extend(e2.order_events);
+        }
         Ok(())
     }
 

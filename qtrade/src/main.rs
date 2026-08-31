@@ -28,13 +28,11 @@ mod types;
 mod decoder;
 #[path = "refdata/refdata.rs"]
 mod refdata;
-// Not used anywhere yet (see main_user_doc.md's honest account of this
-// gap) -- declared here purely so its own real tests (priority queue,
-// tie-break ordering) keep compiling and running as part of this crate's
-// one real binary, the same reason the old decode-only main.rs declared
-// it. Dropping this declaration during the backtester/main.rs merge
-// would have silently removed scheduler's test coverage from `cargo
-// test` entirely -- caught and fixed before it shipped.
+// Real, wired caller as of the dual-clock replay pass (2026-08-27) --
+// `main.rs`'s own loop now drives `Scheduler`/`SimClock` directly (see
+// `main_user_doc.md`). `#[allow(dead_code)]` stays: `SessionTransition`/
+// `StalenessTimeout`/`WatchdogExpiry`/`OffloadCompletion`/`StrategyTimer`
+// remain real, unbacked placeholders -- nothing schedules them yet.
 #[allow(dead_code)]
 #[path = "scheduler/scheduler.rs"]
 mod scheduler;
@@ -46,6 +44,8 @@ mod cache;
 mod simulator;
 #[path = "execution/execution.rs"]
 mod execution;
+#[path = "logging/logging.rs"]
+mod logging;
 #[path = "feed_replay/feed_replay.rs"]
 mod feed_replay;
 #[path = "event_dispatcher/event_dispatcher.rs"]
@@ -60,11 +60,13 @@ mod strategy;
 // `strategy/README.md`) -- swapping strategies means pointing this
 // declaration (and the `use`/construction lines below) at a different
 // subfolder, not compiling more than one in. Currently:
-// `naturalgas_bracket` (a real, order-placing strategy); swap back to
-// `limit_order_book_generator/limit_order_book_generator.rs` for the
-// pure-observer one.
-#[path = "strategy/naturalgas_bracket/naturalgas_bracket.rs"]
-mod naturalgas_bracket;
+// `multi_instrument_bracket` (2026-08-28) -- a real strategy trading two
+// instruments at once, with real resting LIMIT orders, `ctx.modify()`,
+// and `ctx.cancel()`, none of which `naturalgas_bracket` (still present,
+// just not compiled in) ever exercised. `limit_order_book_generator/
+// limit_order_book_generator.rs` is the pure-observer alternative.
+#[path = "strategy/multi_instrument_bracket/multi_instrument_bracket.rs"]
+mod multi_instrument_bracket;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -79,7 +81,9 @@ use cache::{Cache, InstrumentFilter};
 use control_dispatcher::ControlDispatcher;
 use event_dispatcher::EventDispatcher;
 use execution::{CostConfig, ExecutionEngine, LocalOtrConfig, OtrConfigSummary, RunConfig};
-use naturalgas_bracket::NaturalGasBracket;
+use multi_instrument_bracket::MultiInstrumentBracket;
+use scheduler::{EventClass, EventPayload, Scheduler, Target};
+use simulator::SimExchange;
 use strategy::Strategy;
 use types::InstrumentId;
 
@@ -134,6 +138,112 @@ fn fmt_level(lvl: Option<types::PriceLevel>) -> String {
     }
 }
 
+/// Pattern-matches one popped `scheduler::Event` and calls whatever it
+/// means -- the dispatch pattern-matching D07 says belongs in startup
+/// wiring, not inside the Scheduler itself (dual-clock replay,
+/// 2026-08-27; see `scheduler.rs`'s own header for the one dependency it
+/// *does* take on, `decoder::DecodedMessage`, and why that's as far as
+/// it goes).
+///
+/// **The venue call is synchronous, but `OrderArrival`/`ReportDelivery`
+/// are real again -- as venue-poll alarms, not strategy-scheduled
+/// deliveries (2026-08-27, third pass).** `ExecutionEngine::deliver_order`/
+/// `SimExchange::submit` are called directly from `strategy::Ctx::submit`/
+/// `cancel`/`modify` the instant local gates pass -- see `strategy.rs`'s
+/// own header. The real ~500μs MCX round trip lives entirely inside
+/// `SimExchange` itself (`with_order_latency`, split into outbound/inbound
+/// legs), invisible from here -- **except** that a real exchange answers
+/// at its own processing time regardless of whether anything else happens
+/// to occur then, and `SimExchange`'s own `drain_due` only runs when
+/// *something* hands it a fresh `now_ns`. `main.rs` closes that gap: after
+/// every dispatched event, `sync_venue_alarms` checks whether the venue
+/// itself has something pending and keeps exactly one `OrderArrival`
+/// alarm (outbound leg) and one `ReportDelivery` alarm (inbound leg) in
+/// sync with that, reusing the two event classes' own original outbound/
+/// inbound doc comments (`scheduler.rs`) for real, rather than the
+/// strategy-scheduling role they briefly had. When either fires here, it
+/// calls `venue.poll(now)` -- not a specific order's own delivery, just
+/// "check what's due" -- and forwards anything that surfaces exactly like
+/// a real market event would.
+fn dispatch_event(event: scheduler::Event, cache: &mut Cache, engine: &mut ExecutionEngine, venue: &mut SimExchange, event_dispatcher: &mut EventDispatcher, control_dispatcher: &mut ControlDispatcher) {
+    let now = event.timestamp as u64; // always non-negative in this domain -- validated at the point each timestamp entered the Scheduler
+    match event.payload {
+        EventPayload::MarketData { target: Target::SimExchange, message, .. } => {
+            // No gate here, same as before this pass -- a real market
+            // event always reaches the venue, unconditionally (it never
+            // had a live counterpart to gate against in the first place;
+            // see `ExecutionEngine::prepare_for_market_event`'s own doc).
+            engine.prepare_for_market_event(venue);
+            let reports = venue.apply_market_event(&message, now);
+            let outcome = engine.apply_venue_reports(reports, now);
+            control_dispatcher.dispatch(cache, engine, venue, &outcome);
+        }
+        EventPayload::MarketData { target: Target::Cache, message, seq_no, .. } => {
+            if let Some(instrument) = cache.apply(&message) {
+                if let Some(book) = cache.book(instrument) {
+                    let local_outcome = event_dispatcher.on_book_touched(book, instrument, cache, engine, venue, seq_no, now);
+                    control_dispatcher.dispatch(cache, engine, venue, &local_outcome);
+                }
+            }
+            if let decoder::DecodedMessage::Trade(t) = &message {
+                if cache.filter().passes(t.security_id) {
+                    let local_outcome = event_dispatcher.on_trade(cache, engine, venue, InstrumentId(t.security_id as u32), t, seq_no, now);
+                    control_dispatcher.dispatch(cache, engine, venue, &local_outcome);
+                }
+            }
+        }
+        EventPayload::OrderArrival { .. } | EventPayload::ReportDelivery { .. } => {
+            // A venue-poll alarm firing -- not a specific order's own
+            // delivery (there is no `op_id` to look up any more; `venue`
+            // itself already knows what's due). `poll` runs the exact
+            // same two-stage drain `apply_market_event`/`submit` already
+            // run at their own top, just with no new message attached.
+            let reports = venue.poll(now);
+            if !reports.is_empty() {
+                let outcome = engine.apply_venue_reports(reports, now);
+                control_dispatcher.dispatch(cache, engine, venue, &outcome);
+            }
+        }
+        // StrategyTimer/SessionTransition/StalenessTimeout/WatchdogExpiry/
+        // OffloadCompletion: real, unbacked placeholders here -- nothing
+        // schedules them yet (same honest status `strategy/README.md`
+        // already gives `on_timer`/`on_session_change`/etc).
+        _ => {}
+    }
+}
+
+/// Keeps the Scheduler's own alarms in sync with whatever `venue` itself
+/// says it next needs to be checked at (2026-08-27) -- called after every
+/// `dispatch_event`, from both the lookahead-drain loop and the final
+/// drain. Reschedules only when the due time actually *changes*
+/// (`next_arrival_alarm`/`next_visibility_alarm` remember what's already
+/// scheduled) -- an actively-ticking instrument would otherwise get one
+/// redundant alarm pushed onto the Scheduler per real market event while
+/// an order sits pending, for no benefit (`poll`'s own drain is already
+/// idempotent against a stale duplicate).
+fn sync_venue_alarms(venue: &SimExchange, sched: &mut Scheduler, next_arrival_alarm: &mut Option<i64>, next_visibility_alarm: &mut Option<i64>) {
+    // Fast path: nothing pending, and no alarm was already scheduled --
+    // by far the common case (hundreds of millions of market-data calls
+    // per real order). Skips both `next_*_due_ns` scans below entirely.
+    if !venue.has_pending() && next_arrival_alarm.is_none() && next_visibility_alarm.is_none() {
+        return;
+    }
+    let want_arrival = venue.next_arrival_due_ns();
+    if want_arrival != *next_arrival_alarm {
+        if let Some(t) = want_arrival {
+            sched.schedule(t, EventClass::OrderArrival, EventPayload::OrderArrival { op_id: 0 });
+        }
+        *next_arrival_alarm = want_arrival;
+    }
+    let want_visibility = venue.next_visibility_due_ns();
+    if want_visibility != *next_visibility_alarm {
+        if let Some(t) = want_visibility {
+            sched.schedule(t, EventClass::ReportDelivery, EventPayload::ReportDelivery { op_id: 0 });
+        }
+        *next_visibility_alarm = want_visibility;
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     let Some(config_path) = args.get(1) else {
@@ -161,8 +271,8 @@ fn main() -> ExitCode {
     let capture_path = cfg.run.recording_path.as_str();
     let max_outer_records = cfg.run.max_outer_records;
     // `cfg.run.max_feed_stdout_lines` is `limit_order_book_generator`'s
-    // own config knob -- unused while `naturalgas_bracket` is compiled
-    // in, since it doesn't produce a `feed.csv`.
+    // own config knob -- unused while `multi_instrument_bracket` is
+    // compiled in, since it doesn't produce a `feed.csv`.
 
     // Derived from `capture_path`'s own filename by `feed_replay`, so
     // pointing this at any real day's capture file finds that same
@@ -176,14 +286,14 @@ fn main() -> ExitCode {
         }
     };
 
-    // The strategy declares *names* (`naturalgas_bracket::UNDERLYINGS`);
+    // The strategy declares *names* (`multi_instrument_bracket::UNDERLYINGS`);
     // this orchestrator resolves each to *this day's* real front-month
     // token via `feed_replay`. The strategy never sees a hardcoded
     // token from a different day.
-    let resolved: Vec<(&str, Option<InstrumentId>)> = naturalgas_bracket::UNDERLYINGS.iter().map(|name| (*name, feed_replay::resolve_front_month(&master, name))).collect();
+    let resolved: Vec<(&str, Option<InstrumentId>)> = multi_instrument_bracket::UNDERLYINGS.iter().map(|name| (*name, feed_replay::resolve_front_month(&master, name))).collect();
     let tracked_ids: Vec<InstrumentId> = resolved.iter().filter_map(|(_, id)| *id).collect();
     if tracked_ids.is_empty() {
-        eprintln!("none of {:?} resolved to a real front-month future in this day's refdata", naturalgas_bracket::UNDERLYINGS);
+        eprintln!("none of {:?} resolved to a real front-month future in this day's refdata", multi_instrument_bracket::UNDERLYINGS);
         return ExitCode::FAILURE;
     }
     let names_by_id: HashMap<InstrumentId, &str> = resolved.iter().filter_map(|(name, id)| id.map(|i| (i, *name))).collect();
@@ -201,7 +311,7 @@ fn main() -> ExitCode {
     // ready regardless of whether the currently plugged-in strategy ever
     // actually submits an order (some don't -- `LimitOrderBookGenerator`
     // never does, and `orders.log`/`fills.log`/`report.txt` legitimately
-    // come out empty for it; `naturalgas_bracket`, compiled in now, does).
+    // come out empty for it; `multi_instrument_bracket`, compiled in now, does).
     //
     // `freeze_qty` is overridden below -- a separate, still-open gap:
     // `refdata` has no source column for freeze quantity and defaults
@@ -283,15 +393,20 @@ fn main() -> ExitCode {
         max_messages_per_window: 10_000,
         max_otr_ratio: 1_000_000.0,
     };
-    let mut engine = ExecutionEngine::new(
-        run_config,
-        trade_instruments,
-        Box::new(execution::AlwaysAllowRms),
-        CostConfig::default(),
-        venue_otr,
-        vec![1_000_000, 5_000_000],
-        true,
-    );
+    // `SimExchange` built here now, not inside `ExecutionEngine::new` --
+    // it's a sibling `main.rs` owns directly (dual-clock replay,
+    // 2026-08-27), reachable from two places: the Scheduler's direct
+    // market-event feed, and `ExecutionEngine`'s own order-delivery
+    // methods, which now take it as a borrowed parameter (same pattern
+    // `ControlDispatcher::subscribe` already uses for `EventDispatcher`).
+    // `with_order_latency` (2026-08-27, split into outbound/inbound legs
+    // the same day): the real ~500μs MCX round trip now lives entirely
+    // inside the venue itself -- `ExecutionEngine`/`Ctx` call
+    // `submit`/`cancel`/`modify` immediately and have no idea whether the
+    // venue answers now or later. See
+    // `simulator::SimExchange::with_order_latency`'s own doc comment.
+    let mut sim_venue = SimExchange::new(&tracked_ids, venue_otr).with_order_latency(cfg.run.order_outbound_latency_ns, cfg.run.order_inbound_latency_ns);
+    let mut engine = ExecutionEngine::new(run_config, trade_instruments, Box::new(execution::AlwaysAllowRms), CostConfig::default(), vec![1_000_000, 5_000_000], true);
 
     // A fresh, timestamped folder per run -- report generation location
     // is orchestrator config, not strategy or feed-replay concern -- so
@@ -304,7 +419,26 @@ fn main() -> ExitCode {
     }
     println!("run output folder: {run_dir}\n");
 
-    let strategy = NaturalGasBracket::new();
+    // Low-latency, off the hot path (2026-08-27): every `tracing::info!`/
+    // `debug!` call from here on is a cheap, non-blocking channel push --
+    // the real file/stdout write happens on `tracing-appender`'s own
+    // background worker thread, never on whatever thread is driving the
+    // replay loop. `_log_guards` must live for the rest of `main()` --
+    // dropping either guard early stops its worker and silently drops
+    // whatever's still queued. See `logging.rs`'s own header for the
+    // full account (including why this is qtrade's first-ever external
+    // dependency).
+    let events_log_path = format!("{run_dir}/events.log");
+    let log_level = logging::LogLevel::parse(&cfg.run.log_level);
+    let _log_guards = match logging::init(log_level, Path::new(&events_log_path)) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("failed to create {events_log_path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let strategy = MultiInstrumentBracket::new();
     // `Rc<RefCell<_>>`, not `Box`: a clone (coerced to `dyn Strategy`) is
     // what actually moves into `event_dispatcher`'s/`control_dispatcher`'s
     // registries below -- this concrete handle stays here so the final
@@ -319,8 +453,9 @@ fn main() -> ExitCode {
     // Same strategy instance, registered a second time -- `EventDispatcher`
     // will only ever call `.on_book()`/`.on_trade()` on it,
     // `ControlDispatcher` only ever `.on_fill()`/`.on_order_update()`;
-    // `naturalgas_bracket` is the first strategy where the latter drives
-    // real state (`WaitingForEntryFill`/`WaitingForExitFill` onward).
+    // `multi_instrument_bracket` is the first strategy where the latter
+    // drives real state (`WaitingForEntryFill`/`WaitingForExitFill` onward)
+    // across more than one instrument at once.
     control_dispatcher.register(strategy.clone() as Rc<RefCell<dyn Strategy>>);
     {
         // Same resolution `main.rs` already did above for its own
@@ -335,27 +470,64 @@ fn main() -> ExitCode {
     let limit_desc = if max_outer_records == 0 { "no limit -- full file, start to end".to_string() } else { format!("capped at {max_outer_records} outer records") };
     println!("streaming {capture_path} record-by-record ({limit_desc})\n");
 
-    let stats = match feed_replay::replay(capture_path, max_outer_records, |ev| {
-        // Phase C, Q1: the venue applies this event *before* the strategy
-        // is ever asked to react to it -- so by the time on_book/on_trade
-        // fire, Cache and SimExchange already agree on this exact event.
-        // A strategy that submits from on_book/on_trade would otherwise
-        // be acting against a one-event-stale venue book.
-        let outcome = engine.on_market_event(ev.event, ev.now_ns);
-        control_dispatcher.dispatch(&cache, &mut engine, &outcome);
+    // Dual-clock replay (2026-08-27): `SimExchange` runs on the exchange's
+    // own clock (`exchange_ts`), `Cache`/`EventDispatcher`/`Strategy` run
+    // on the recorder's (`recorder_ts` = `exchange_ts` + real, measured
+    // feed latency) -- see `feed_replay::ReplayEvent`'s own doc comment
+    // and `main_user_doc.md` for the full account, including the real
+    // check against `19_08_2026` that grounded this. `Scheduler`
+    // (`scheduler.rs`, built but never called until the dual-clock pass)
+    // is what makes a single real message deliverable at two different
+    // scheduled times without two separate passes over the file --
+    // that's still real; only the *order-latency* scheduling this same
+    // loop used to also drive (`OrderArrival`/`ReportDelivery`) moved
+    // into `SimExchange` itself the same day (see `strategy.rs`'s header).
+    let mut sched = Scheduler::new();
+    let max_feed_delta_ns = cfg.run.max_feed_delta_ns as i64;
+    // `sync_venue_alarms`'s own memory of what's already scheduled
+    // (2026-08-27) -- see that function's doc comment: a real exchange
+    // answers at its own processing time even in a quiet market, so
+    // `sim_venue` itself has to be checked after every dispatched event,
+    // not just when a real market tick happens to nudge it.
+    let mut next_arrival_alarm: Option<i64> = None;
+    let mut next_visibility_alarm: Option<i64> = None;
 
-        if let Some(instrument) = cache.apply(ev.event) {
-            if let Some(book) = cache.book(instrument) {
-                let strategy_outcome = event_dispatcher.on_book_touched(book, instrument, &cache, &mut engine, ev.seq_no, ev.packet_transact_time_ns);
-                control_dispatcher.dispatch(&cache, &mut engine, &strategy_outcome);
-            }
+    let stats = match feed_replay::replay(capture_path, max_outer_records, |ev| {
+        let exchange_ts = ev.exchange_ts as i64;
+        let recorder_ts = ev.recorder_ts;
+        let delta = recorder_ts - exchange_ts;
+        // D20 fail-fast, decision #1 of the 2026-08-27 planning session --
+        // never clamped. A negative delta or one past the ceiling means
+        // the input data itself isn't trustworthy; better to know that
+        // now than to model physics off a fabricated number.
+        if delta < 0 || delta > max_feed_delta_ns {
+            eprintln!(
+                "FATAL: implausible feed-latency delta at seq={}: recorder_ts={recorder_ts} exchange_ts={exchange_ts} delta={delta}ns (ceiling {max_feed_delta_ns}ns)",
+                ev.seq_no
+            );
+            std::process::exit(1);
         }
-        if let decoder::DecodedMessage::Trade(t) = ev.event {
-            if cache.filter().passes(t.security_id) {
-                let strategy_outcome = event_dispatcher.on_trade(&cache, &mut engine, InstrumentId(t.security_id as u32), t, ev.seq_no, ev.packet_transact_time_ns);
-                control_dispatcher.dispatch(&cache, &mut engine, &strategy_outcome);
+
+        // Safe lookahead drain: nothing still unread in the file can ever
+        // produce a timestamp earlier than *this* message's own
+        // `exchange_ts` (exchange_ts is monotonic non-decreasing across
+        // one venue's stream). Draining strictly before it -- never at or
+        // past it -- so this message's own not-yet-scheduled SimExchange
+        // delivery, or an exact tie already queued, is never popped
+        // early. See `main_user_doc.md` for the full reasoning and why
+        // this doesn't need a full priority-queue merge against the file
+        // read itself.
+        while let Some(peek_ts) = sched.peek_earliest_timestamp() {
+            if peek_ts >= exchange_ts {
+                break;
             }
+            let event = sched.pop_earliest().expect("just peeked Some");
+            dispatch_event(event, &mut cache, &mut engine, &mut sim_venue, &mut event_dispatcher, &mut control_dispatcher);
+            sync_venue_alarms(&sim_venue, &mut sched, &mut next_arrival_alarm, &mut next_visibility_alarm);
         }
+
+        sched.schedule(exchange_ts, EventClass::MarketData, EventPayload::MarketData { target: Target::SimExchange, message: *ev.event, seq_no: ev.seq_no, exchange_ts: ev.exchange_ts, recorder_ts: ev.recorder_ts });
+        sched.schedule(recorder_ts, EventClass::MarketData, EventPayload::MarketData { target: Target::Cache, message: *ev.event, seq_no: ev.seq_no, exchange_ts: ev.exchange_ts, recorder_ts: ev.recorder_ts });
     }) {
         Ok(s) => s,
         Err(e) => {
@@ -364,15 +536,25 @@ fn main() -> ExitCode {
         }
     };
 
-    // `Strategy::on_stop` -- real, wired (Q3 of today's design session):
-    // "shutting down, last chance to clean up." `can_submit: false` --
-    // unlike `on_book`/`on_trade`, nothing forwards whatever a submit
-    // here might produce (the replay loop has already ended, there is no
-    // more `control_dispatcher.dispatch` call coming), so a write must
-    // fail loudly rather than be silently lost. `now_ns: 0` -- there is
-    // no real "current event" once the run is over for this to report.
+    // Final drain -- nothing more can arrive once the file is exhausted.
+    // Venue alarms still fire correctly here too: any order still
+    // in-flight when the file ends gets its own outbound/inbound wake-ups
+    // popped in the same loop, same as during real replay.
+    while let Some(event) = sched.pop_earliest() {
+        dispatch_event(event, &mut cache, &mut engine, &mut sim_venue, &mut event_dispatcher, &mut control_dispatcher);
+        sync_venue_alarms(&sim_venue, &mut sched, &mut next_arrival_alarm, &mut next_visibility_alarm);
+    }
+
+    // `Strategy::on_stop` -- real, wired (Q3 of the 2026-08-25 design
+    // session): "shutting down, last chance to clean up." `can_submit:
+    // false` -- unlike `on_book`/`on_trade`, nothing forwards whatever a
+    // submit here might produce (the replay loop has already ended,
+    // there is no more `control_dispatcher.dispatch` call coming), so a
+    // write must fail loudly rather than be silently lost. `now_ns: 0` --
+    // there is no real "current event" once the run is over for this to
+    // report.
     {
-        let mut stop_ctx = strategy::Ctx::new(&cache, &mut engine, 0, strategy::DEFAULT_STRATEGY_ID, false);
+        let mut stop_ctx = strategy::Ctx::new(&cache, &mut engine, &mut sim_venue, 0, strategy::DEFAULT_STRATEGY_ID, false);
         strategy.borrow_mut().on_stop(&mut stop_ctx);
     }
 
@@ -386,9 +568,9 @@ fn main() -> ExitCode {
         stats.events as f64 / stats.elapsed.as_secs_f64()
     );
     println!("round trips: {}", strategy.borrow().round_trips().len());
-    for (i, (entry_raw, exit_raw, reason)) in strategy.borrow().round_trips().iter().enumerate() {
+    for (i, (name, entry_raw, exit_raw, reason)) in strategy.borrow().round_trips().iter().enumerate() {
         println!(
-            "  #{}: entry Rs {:.2} -> exit Rs {:.2} ({reason}), {:+.2} Rs/lot before costs",
+            "  #{}: {name}: entry Rs {:.2} -> exit Rs {:.2} ({reason}), {:+.2} Rs/lot before costs",
             i + 1,
             *entry_raw as f64 / RUPEE_RAW,
             *exit_raw as f64 / RUPEE_RAW,
@@ -435,11 +617,12 @@ fn main() -> ExitCode {
     }
 
     let report_path = format!("{run_dir}/report.txt");
-    let tier1 = engine.tier1_report();
+    let tier1 = engine.tier1_report(&sim_venue);
     fs::write(&report_path, format!("{tier1}")).expect("write report.txt");
 
     println!("\n--- report (Tier 1) ---\n{tier1}");
     println!("logs written:");
+    println!("  {events_log_path}  (component-level event trail, level={:?})", log_level);
     println!("  {orders_path}  ({} order events)", engine.order_events().len());
     println!("  {fills_path}  ({} fills)", engine.fills().len());
     println!("  {report_path}");

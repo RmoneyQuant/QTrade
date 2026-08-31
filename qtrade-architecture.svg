@@ -1,0 +1,233 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 1920 1420" width="1920" height="1420" role="img"
+     aria-label="QTrade's real architecture, 2026-08-27, third pass: order latency lives entirely inside SimExchange, split into a real outbound leg and a real inbound leg, with the Scheduler used to guarantee resolution even in a quiet market. Two flows are shown. Setup-time, once, before replay begins: the strategy's on_start calls ctx.subscribe, which goes from Strategy to ControlDispatcher, which registers the route with EventDispatcher -- dashed arrows, since this never repeats. Runtime, once per real event: main.rs schedules two MarketData events per capture record, one at exchange_ts targeting SimExchange and one at recorder_ts targeting Cache; when a real market event fires, main.rs calls SimExchange directly, then ExecutionEngine turns the resulting reports into an ExecOutcome which flows back through main.rs and immediately onward to ControlDispatcher, which calls the strategy's on_fill or on_order_update -- one connected path, not two independent calls. Separately, when a subscribed book changes, EventDispatcher wakes the strategy through Ctx, whose ctx.submit, cancel, or modify calls ExecutionEngine's gate check and its venue delivery back to back, synchronously, in the same instant, with no Scheduler reference in that path at all. SimExchange itself holds a submitted order in an internal queue and matches it only once its own real outbound delay has elapsed, holding the resulting report a further real inbound delay before it becomes visible -- and because a real exchange answers at its own processing time regardless of what else happens, main.rs also keeps one OrderArrival alarm and one ReportDelivery alarm in sync with whatever SimExchange itself says it is waiting on, so a quiet market can never leave an order unresolved past its true due time.">
+
+  <defs>
+    <marker id="ah-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e3a83b"/></marker>
+    <marker id="ah-cyan" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#46c2d9"/></marker>
+    <marker id="ah-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b18cf0"/></marker>
+    <marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e2584f"/></marker>
+    <marker id="ah-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8792ad"/></marker>
+    <marker id="ah-grey-rev" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#8792ad"/></marker>
+    <marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#aab2c8"/></marker>
+  </defs>
+
+  <style>
+    text { font-family: "Segoe UI", Helvetica, Arial, sans-serif; fill: #e7ebf7; }
+    .mono { font-family: Consolas, "SF Mono", Menlo, monospace; }
+    .bg { fill: #0f1320; }
+    .title { font-size: 25px; font-weight: 700; fill: #f2f4fb; }
+    .subtitle { font-size: 13px; fill: #8992ac; }
+    .boundary { fill: none; stroke: #384062; stroke-width: 1.5; stroke-dasharray: 8 6; }
+    .boundary-lbl { font-size: 12.5px; fill: #6e7791; }
+    .box-title { font-weight: 700; font-size: 15px; fill: #f2f4fb; }
+    .box-sub { font-size: 11px; fill: #aab2c8; }
+    .box-mono { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 10.5px; fill: #aab2c8; }
+    .edge-lbl { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 10.5px; }
+    .edge-lbl-bg { fill: #0f1320; opacity: 0.86; }
+    .amber-t { fill: #e3a83b; } .cyan-t { fill: #46c2d9; } .violet-t { fill: #b18cf0; } .red-t { fill: #e2584f; } .grey-t { fill: #8792ad; } .gold-t { fill: #e8c547; }
+    .box-neutral { fill: #171d2e; stroke: #4a5478; stroke-width: 1.6; }
+    .box-amber { fill: #2a2213; stroke: #e3a83b; stroke-width: 1.8; }
+    .box-cyan { fill: #122a30; stroke: #46c2d9; stroke-width: 1.8; }
+    .box-violet { fill: #211a30; stroke: #b18cf0; stroke-width: 2; }
+    .box-red { fill: #2c1615; stroke: #e2584f; stroke-width: 1.3; }
+    .box-gold { fill: #2b2410; stroke: #e8c547; stroke-width: 1.8; }
+    .chip { fill: #0f1320; stroke: #384062; stroke-width: 1.2; }
+    .chip-muted { fill: #0f1320; stroke: #4a5478; stroke-width: 1.2; stroke-dasharray: 4 3; opacity: 0.85; }
+    .edge-amber { stroke: #e3a83b; fill: none; stroke-width: 2; }
+    .edge-cyan { stroke: #46c2d9; fill: none; stroke-width: 2; }
+    .edge-violet { stroke: #b18cf0; fill: none; stroke-width: 2; }
+    .edge-violet-dash { stroke: #b18cf0; fill: none; stroke-width: 1.8; stroke-dasharray: 7 5; }
+    .edge-red { stroke: #e2584f; fill: none; stroke-width: 1.6; stroke-dasharray: 4 4; }
+    .edge-grey { stroke: #8792ad; fill: none; stroke-width: 1.6; stroke-dasharray: 6 4; }
+    .edge-ink { stroke: #aab2c8; fill: none; stroke-width: 1.6; }
+    .dot { stroke-width: 0; }
+  </style>
+
+  <rect class="bg" x="0" y="0" width="1920" height="1420"/>
+
+  <text class="title" x="960" y="44" text-anchor="middle">QTrade — Architecture (order latency lives in the venue)</text>
+  <text class="subtitle" x="960" y="70" text-anchor="middle">Solid arrows: the per-event runtime loop. Dashed arrows: one-time setup, during on_start. Order/cancel/modify calls reach SimExchange immediately — the outbound/inbound delay, and the alarm that guarantees it resolves, are the venue's own business.</text>
+
+  <rect class="boundary" x="40" y="95" width="1840" height="1270" rx="16"/>
+  <text class="boundary-lbl mono" x="64" y="124">main.rs — constructs every engine below, owns the one real Scheduler (now used only for the two MarketData events per record), and is the only place that pattern-matches a popped event (dispatch_event)</text>
+
+  <!-- Row A: capture file / fork / Q1 callout -->
+  <rect class="box-neutral" x="90" y="150" width="280" height="110" rx="8"/>
+  <text class="box-title" x="230" y="180" text-anchor="middle">MCX capture file (.bin)</text>
+  <text class="box-mono" x="230" y="206" text-anchor="middle">feed_replay::replay(...)</text>
+  <text class="box-sub" x="230" y="226" text-anchor="middle">streams + decodes each outer record</text>
+
+  <rect class="box-neutral" x="760" y="150" width="400" height="110" rx="8"/>
+  <text class="box-title" x="960" y="172" text-anchor="middle">two real timestamps, per record</text>
+  <line x1="850" y1="196" x2="1070" y2="196" class="edge-grey" marker-start="url(#ah-grey-rev)" marker-end="url(#ah-grey)"/>
+  <text class="edge-lbl grey-t" x="960" y="188" text-anchor="middle">Δ = real feed latency (measured, not modeled)</text>
+  <circle cx="850" cy="222" r="6" class="amber-t dot"/>
+  <circle cx="1070" cy="222" r="6" class="cyan-t dot"/>
+  <line x1="850" y1="222" x2="1070" y2="222" class="edge-ink"/>
+  <text class="box-mono amber-t" x="850" y="242" text-anchor="middle">exchange_ts</text>
+  <text class="box-mono cyan-t" x="1070" y="242" text-anchor="middle">recorder_ts</text>
+
+  <rect class="box-red" x="1420" y="150" width="410" height="110" rx="8"/>
+  <text class="box-title red-t" x="1625" y="172" text-anchor="middle">Q1 fail-fast (D20)</text>
+  <text class="box-sub" x="1625" y="192" text-anchor="middle">negative Δ, or Δ &gt; max_feed_delta_ns ⇒ hard run</text>
+  <text class="box-sub" x="1625" y="208" text-anchor="middle">failure, never clamped — checked every record.</text>
+  <text class="box-mono" x="1625" y="228" text-anchor="middle">Real: 19_08_2026 hit −135ns (pre-NTP-sync);</text>
+  <text class="box-mono" x="1625" y="244" text-anchor="middle">21_08_2026 verified clean (60M records) — used since.</text>
+
+  <line x1="370" y1="205" x2="760" y2="205" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <line x1="1160" y1="205" x2="1420" y2="205" class="edge-red" marker-end="url(#ah-red)"/>
+
+  <!-- Row B: Scheduler -->
+  <rect class="box-neutral" x="740" y="300" width="440" height="200" rx="10"/>
+  <text class="box-title" x="960" y="326" text-anchor="middle">scheduler::Scheduler — one priority queue</text>
+  <text class="box-mono" x="960" y="344" text-anchor="middle">(timestamp, event_class, seq) order</text>
+  <rect class="chip" x="770" y="356" width="380" height="28" rx="5"/>
+  <text class="box-mono amber-t" x="960" y="375" text-anchor="middle">MarketData{target: SimExchange} @ exchange_ts</text>
+  <rect class="chip" x="770" y="390" width="380" height="28" rx="5"/>
+  <text class="box-mono cyan-t" x="960" y="409" text-anchor="middle">MarketData{target: Cache} @ recorder_ts</text>
+  <rect class="chip" x="770" y="424" width="380" height="42" rx="5" fill="#2b2410" stroke="#e8c547"/>
+  <text class="box-mono gold-t" x="960" y="440" text-anchor="middle">OrderArrival / ReportDelivery — venue-poll alarms</text>
+  <text class="box-mono gold-t" x="960" y="454" text-anchor="middle">kept in sync with SimExchange's own due times, below</text>
+
+  <line x1="850" y1="260" x2="850" y2="300" class="edge-amber" marker-end="url(#ah-amber)"/>
+  <text class="edge-lbl amber-t" x="640" y="284">schedule MarketData{SimExchange} @ exchange_ts</text>
+  <line x1="1070" y1="260" x2="1070" y2="300" class="edge-cyan" marker-end="url(#ah-cyan)"/>
+  <text class="edge-lbl cyan-t" x="1085" y="284">schedule MarketData{Cache} @ recorder_ts</text>
+
+  <line x1="960" y1="500" x2="960" y2="510" class="edge-ink" marker-end="url(#ah-ink)"/>
+
+  <!-- dispatch_event tag -->
+  <rect class="box-neutral" x="740" y="510" width="440" height="50" rx="8"/>
+  <text class="box-mono" x="960" y="530" text-anchor="middle">main.rs :: dispatch_event(event, ...)</text>
+  <text class="box-sub" x="960" y="546" text-anchor="middle">pops earliest, pattern-matches Target — routing lives here (D07)</text>
+
+  <!-- Row C: SimExchange / Cache -->
+  <rect class="box-amber" x="90" y="630" width="380" height="170" rx="8"/>
+  <text class="box-title amber-t" x="280" y="656" text-anchor="middle">SimExchange</text>
+  <text class="box-sub" x="280" y="676" text-anchor="middle">own order book, built on exchange_ts</text>
+  <text class="box-sub" x="280" y="692" text-anchor="middle">zero dependency on Cache, by construction (D10)</text>
+  <rect class="box-gold" x="110" y="704" width="340" height="46" rx="5"/>
+  <text class="box-mono gold-t" x="280" y="718" text-anchor="middle">ORDER LATENCY + ITS ALARM LIVE HERE:</text>
+  <text class="box-mono gold-t" x="280" y="731" text-anchor="middle">in_transit (outbound) → awaiting_visibility (inbound);</text>
+  <text class="box-mono gold-t" x="280" y="744" text-anchor="middle">next_*_due_ns() drives main.rs's own poll alarm</text>
+  <rect class="box-red" x="110" y="756" width="340" height="26" rx="5"/>
+  <text class="box-mono red-t" x="280" y="773" text-anchor="middle">own harness: simulator-validate</text>
+
+  <rect class="box-cyan" x="1450" y="630" width="380" height="130" rx="8"/>
+  <text class="box-title cyan-t" x="1640" y="656" text-anchor="middle">Cache</text>
+  <text class="box-sub" x="1640" y="676" text-anchor="middle">own order book, built on recorder_ts —</text>
+  <text class="box-sub" x="1640" y="692" text-anchor="middle">the honest, always-lagging view a live strategy has</text>
+
+  <!-- Row D: ExecutionEngine / EventDispatcher -->
+  <rect class="box-amber" x="90" y="850" width="380" height="190" rx="8"/>
+  <text class="box-title amber-t" x="280" y="876" text-anchor="middle">ExecutionEngine</text>
+  <text class="box-mono" x="280" y="898" text-anchor="middle">submit_order_local(intent, venue: &amp;SimExchange)</text>
+  <text class="box-mono" x="280" y="914" text-anchor="middle">deliver_order(req, venue: &amp;mut SimExchange)</text>
+  <text class="box-sub" x="280" y="930" text-anchor="middle">called back-to-back, synchronously — no Scheduler hop</text>
+  <text class="box-mono" x="280" y="950" text-anchor="middle">prepare_for_market_event / apply_venue_reports</text>
+  <text class="box-sub" x="280" y="966" text-anchor="middle">called directly by main.rs for real market-event fills</text>
+  <rect class="box-red" x="110" y="984" width="340" height="26" rx="5"/>
+  <text class="box-mono red-t" x="280" y="1001" text-anchor="middle">own harness: execution-validate</text>
+
+  <rect class="box-cyan" x="1450" y="850" width="380" height="130" rx="8"/>
+  <text class="box-title cyan-t" x="1640" y="876" text-anchor="middle">EventDispatcher</text>
+  <text class="box-sub" x="1640" y="898" text-anchor="middle">on_book_touched (snapshot-diff) /</text>
+  <text class="box-sub" x="1640" y="914" text-anchor="middle">on_trade (unconditional) — wakes the strategy</text>
+
+  <!-- Row E: Strategy / ControlDispatcher -->
+  <rect class="box-violet" x="620" y="1090" width="680" height="200" rx="10"/>
+  <text class="box-title violet-t" x="960" y="1118" text-anchor="middle">Strategy (naturalgas_bracket) via Ctx</text>
+  <text class="box-mono" x="960" y="1144" text-anchor="middle">ctx.submit/cancel/modify → submit_order_local + deliver_order,</text>
+  <text class="box-mono" x="960" y="1160" text-anchor="middle">synchronous, same instant — no Scheduler, no RunHandles (2026-08-27)</text>
+  <text class="box-sub" x="960" y="1184" text-anchor="middle">Ctx holds &amp;mut SimExchange only to pass through to ExecutionEngine —</text>
+  <text class="box-sub" x="960" y="1200" text-anchor="middle">never calls the venue directly itself</text>
+  <text class="box-mono violet-t" x="960" y="1230" text-anchor="middle">10 real round trips, 21_08_2026, outbound=inbound=250,000ns</text>
+  <text class="box-mono violet-t" x="960" y="1246" text-anchor="middle">— see naturalgas_bracket.md</text>
+
+  <rect class="box-violet" x="1450" y="1090" width="380" height="130" rx="8"/>
+  <text class="box-title violet-t" x="1640" y="1118" text-anchor="middle">ControlDispatcher</text>
+  <text class="box-sub" x="1640" y="1140" text-anchor="middle">dispatch(...) — called immediately,</text>
+  <text class="box-sub" x="1640" y="1156" text-anchor="middle">no scheduled hop (2026-08-27)</text>
+  <text class="box-sub" x="1640" y="1178" text-anchor="middle">the only caller of on_fill / on_order_update</text>
+
+  <!-- E: tag -> SimExchange -->
+  <path d="M800,560 L800,600 L280,600 L280,630" class="edge-amber" marker-end="url(#ah-amber)"/>
+  <rect class="edge-lbl-bg" x="560" y="583" width="220" height="16"/>
+  <text class="edge-lbl amber-t" x="670" y="595" text-anchor="middle">apply_market_event(...)</text>
+
+  <!-- F: tag -> Cache -->
+  <path d="M1140,560 L1140,600 L1640,600 L1640,630" class="edge-cyan" marker-end="url(#ah-cyan)"/>
+  <rect class="edge-lbl-bg" x="1260" y="583" width="160" height="16"/>
+  <text class="edge-lbl cyan-t" x="1340" y="595" text-anchor="middle">cache.apply(...)</text>
+
+  <!-- G: tag -> ExecutionEngine (the forward call, for the real-market-event branch) -->
+  <path d="M900,560 L900,900 L470,900" class="edge-amber" marker-end="url(#ah-amber)"/>
+  <rect class="edge-lbl-bg" x="640" y="883" width="250" height="16"/>
+  <text class="edge-lbl amber-t" x="765" y="895" text-anchor="middle">prepare_for_market_event(venue)</text>
+
+  <!-- G2: ExecutionEngine -> tag, the RETURN leg carrying the real ExecOutcome:
+       drawn as one connected path with H below. EE's own output is exactly
+       what main.rs immediately forwards to ControlDispatcher, not two
+       unrelated calls that happen to share a source. -->
+  <path d="M470,920 L960,920 L960,560" class="edge-amber" marker-end="url(#ah-amber)"/>
+  <rect class="edge-lbl-bg" x="560" y="903" width="330" height="16"/>
+  <text class="edge-lbl amber-t" x="725" y="915" text-anchor="middle">apply_venue_reports(reports) → ExecOutcome</text>
+
+  <!-- H: tag -> ControlDispatcher, continues directly from G2's own
+       arrival point (960,560): the exact ExecOutcome G2 just returned is
+       what this call forwards, immediately, no scheduled hop. -->
+  <path d="M960,560 L960,780 L1900,780 L1900,1150 L1830,1150" class="edge-violet" marker-end="url(#ah-violet)"/>
+  <rect class="edge-lbl-bg" x="1330" y="763" width="280" height="16"/>
+  <text class="edge-lbl violet-t" x="1470" y="775" text-anchor="middle">dispatch(..., &amp;outcome) — same value, immediate</text>
+
+  <!-- I: SimExchange<->ExecutionEngine borrow (double-headed grey dashed) -->
+  <line x1="280" y1="800" x2="280" y2="850" class="edge-grey" marker-start="url(#ah-grey-rev)" marker-end="url(#ah-grey)"/>
+  <rect class="edge-lbl-bg" x="292" y="807" width="330" height="16"/>
+  <text class="edge-lbl grey-t" x="298" y="819">venue: &amp;SimExchange / &amp;mut SimExchange — borrowed, never stored (D10)</text>
+
+  <!-- J: Cache -> EventDispatcher -->
+  <line x1="1640" y1="760" x2="1640" y2="850" class="edge-cyan" marker-end="url(#ah-cyan)"/>
+  <text class="edge-lbl cyan-t" x="1656" y="810">book touched</text>
+
+  <!-- K: EventDispatcher -> Strategy -->
+  <path d="M1640,980 L1640,1040 L1250,1040 L1250,1090" class="edge-violet" marker-end="url(#ah-violet)"/>
+  <rect class="edge-lbl-bg" x="1310" y="1023" width="220" height="16"/>
+  <text class="edge-lbl violet-t" x="1420" y="1035" text-anchor="middle">on_book / on_trade(ctx)</text>
+
+  <!-- L: Strategy -> ExecutionEngine (the ONLY connection Strategy/Ctx has) -->
+  <path d="M620,1150 L350,1150 L350,1040" class="edge-violet" marker-end="url(#ah-violet)"/>
+  <rect class="edge-lbl-bg" x="360" y="1135" width="250" height="16"/>
+  <text class="edge-lbl violet-t" x="485" y="1147" text-anchor="middle">ctx.submit/cancel/modify — synchronous</text>
+
+  <!-- M: ControlDispatcher -> Strategy -->
+  <line x1="1450" y1="1150" x2="1300" y2="1150" class="edge-violet" marker-end="url(#ah-violet)"/>
+  <rect class="edge-lbl-bg" x="1310" y="1126" width="200" height="16"/>
+  <text class="edge-lbl violet-t" x="1400" y="1138" text-anchor="middle">on_fill / on_order_update</text>
+
+  <!-- N1: Strategy -> ControlDispatcher, subscription, on_start only -->
+  <line x1="1300" y1="1114" x2="1450" y2="1114" class="edge-violet-dash" marker-end="url(#ah-violet)"/>
+  <rect class="edge-lbl-bg" x="1310" y="1090" width="230" height="16"/>
+  <text class="edge-lbl violet-t" x="1425" y="1102" text-anchor="middle">ctx.subscribe — on_start, once</text>
+
+  <!-- N2: ControlDispatcher -> EventDispatcher, registers the route, on_start only -->
+  <path d="M1800,1090 L1800,980" class="edge-violet-dash" marker-end="url(#ah-violet)"/>
+  <rect class="edge-lbl-bg" x="1690" y="1027" width="220" height="16"/>
+  <text class="edge-lbl violet-t" x="1800" y="1039" text-anchor="middle">event_dispatcher.subscribe — once</text>
+
+  <!-- Legend -->
+  <g class="mono" font-size="11.5">
+    <rect x="90" y="1332" width="16" height="16" fill="#e3a83b"/>
+    <text x="114" y="1345" fill="#aab2c8">exchange-clock path (SimExchange)</text>
+    <rect x="440" y="1332" width="16" height="16" fill="#46c2d9"/>
+    <text x="464" y="1345" fill="#aab2c8">recorder-clock path (Cache)</text>
+    <rect x="750" y="1332" width="16" height="16" fill="#b18cf0"/>
+    <text x="774" y="1345" fill="#aab2c8">strategy / control decision, always synchronous</text>
+    <rect x="1150" y="1332" width="16" height="16" fill="#e2584f"/>
+    <text x="1174" y="1345" fill="#aab2c8">fail-fast / terminal deny-reject</text>
+    <rect x="1450" y="1332" width="16" height="16" fill="none" stroke="#8792ad" stroke-dasharray="3 2"/>
+    <text x="1474" y="1345" fill="#aab2c8">borrowed ref, never stored (D10)</text>
+  </g>
+  <text class="subtitle" x="960" y="1395" text-anchor="middle">Real, 21_08_2026: every Submitted→Filled gap is now exactly 500,000ns (250,000 outbound + 250,000 inbound) — the alarm resolves each order at its true due time, not whenever the next real tick happens to arrive.</text>
+</svg>

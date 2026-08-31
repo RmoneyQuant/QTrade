@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 600" role="img" aria-label="Order state machine: Initialized transitions to Denied on local gate rejection or Submitted when gates pass; Submitted to Rejected or Accepted; Accepted to PartiallyFilled to Filled; Accepted and PartiallyFilled can enter PendingUpdate or PendingCancel; PendingCancel resolves to Canceled or, in a race, to Filled; Accepted can be cancelled unsolicited or expire.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 700" role="img" aria-label="Order state machine, verified line-by-line against execution.rs and simulator.rs as of 2026-08-27: Initialized transitions to Denied on a local gate rejection (TickSize, FreezeQty, LocalOtrOrRate, UnknownInstrument -- RmsRejected is declared but unreachable while the only Rms impl always allows) or to Submitted when gates pass; Submitted resolves to Rejected (WouldCross, NoLiquidityForResidual, UnknownInstrument, or OtrOrRateExceeded) or Accepted; Accepted and PartiallyFilled can enter PendingUpdate, which can itself enter PendingCancel directly; PendingCancel resolves to Canceled or, in a real race the code explicitly guards, to Filled if a fill arrives first; a real OrderMassDelete message can cancel unsolicited, but Mmp, Watchdog, SessionLoss and Risk cancel reasons are declared in the enum with zero producing code anywhere; mark_expired is fully implemented but has no live caller in main.rs or any strategy today.">
 <style>
 .bx{fill:#FFFFFF;stroke:#2A46A8;stroke-width:1.8}
 .bxf{fill:#FBF1DE;stroke:#A16207;stroke-width:1.8}
@@ -18,7 +18,7 @@
 <marker id="ac" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2A46A8"/></marker>
 <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#A16207"/></marker>
 </defs>
-<rect x="0" y="0" width="1240" height="600" fill="#FFFFFF"/>
+<rect x="0" y="0" width="1240" height="700" fill="#FFFFFF"/>
 
 <text class="z" x="40" y="32">WORKING</text>
 <text class="z" x="40" y="232">IN FLIGHT</text>
@@ -39,8 +39,9 @@
 <rect class="bxf" x="500" y="240" width="160" height="56" rx="6"/>
 <text class="t m" x="580" y="264">PendingUpdate</text><text class="s m" x="580" y="282">modify in flight</text>
 
-<rect class="bxf" x="740" y="240" width="180" height="56" rx="6"/>
+<rect class="bxf" x="740" y="240" width="180" height="70" rx="6"/>
 <text class="t m" x="830" y="264">PendingCancel</text><text class="s m" x="830" y="282">cancel in flight</text>
+<text class="s m" x="830" y="298" font-style="italic" font-size="9">or direct from PendingUpdate</text>
 
 <rect class="bxt" x="40" y="430" width="150" height="56" rx="6"/>
 <text class="t m" x="115" y="454">Denied</text><text class="s m" x="115" y="472">never left qtrade</text>
@@ -61,15 +62,21 @@
 <text class="s m" x="228" y="80">gates pass</text>
 
 <line class="ln" x1="115" y1="118" x2="115" y2="426" marker-end="url(#a)"/>
-<text class="s" x="124" y="270">local gate reject</text>
-<text class="s" x="124" y="286">(synchronous)</text>
+<text class="s" x="124" y="254">local gate reject (synchronous,</text>
+<text class="s" x="124" y="268">never reaches SimExchange):</text>
+<text class="s" x="124" y="284">TickSize &#183; FreezeQty &#183;</text>
+<text class="s" x="124" y="298">LocalOtrOrRate &#183; UnknownInstrument</text>
+<text class="s" x="124" y="312" font-style="italic">(+RmsRejected -- unreachable: the</text>
+<text class="s" x="124" y="326" font-style="italic">only Rms impl always allows)</text>
 
 <line class="lnc" x1="420" y1="88" x2="496" y2="88" marker-end="url(#ac)"/>
 <text class="s m" x="458" y="80">venue ack</text>
 
 <line class="ln" x1="345" y1="118" x2="345" y2="426" marker-end="url(#a)"/>
-<text class="s" x="354" y="270">venue reject</text>
-<text class="s" x="354" y="286">BOC would cross</text>
+<text class="s" x="354" y="254">venue reject (reached SimExchange,</text>
+<text class="s" x="354" y="268">it said no) -- simulator::RejectReason:</text>
+<text class="s" x="354" y="284">WouldCross &#183; NoLiquidityForResidual</text>
+<text class="s" x="354" y="298">UnknownInstrument &#183; OtrOrRateExceeded</text>
 
 <line class="lnc" x1="660" y1="88" x2="736" y2="88" marker-end="url(#ac)"/>
 <text class="s m" x="698" y="80">fill</text>
@@ -86,17 +93,32 @@
 <line class="ln" x1="830" y1="118" x2="830" y2="236" marker-end="url(#a)"/>
 <text class="s m" x="830" y="182">cancel</text>
 
-<polyline class="ln" points="790,298 790,350 580,350 580,426" marker-end="url(#a)"/>
+<line class="ln" x1="660" y1="290" x2="736" y2="290" marker-end="url(#a)"/>
+<text class="s m" x="698" y="283">cancel</text>
+
+<polyline class="ln" points="790,310 790,350 580,350 580,426" marker-end="url(#a)"/>
 <text class="s m" x="700" y="342">cancel confirmed</text>
 
 <polyline class="lnb" points="920,278 1150,278 1150,390 1070,390 1070,426" marker-end="url(#ab)"/>
 <text class="sb" x="960" y="270">RACE — filled before cancel arrived</text>
 
 <polyline class="ln dash" points="500,100 460,100 460,458 496,458" marker-end="url(#a)"/>
-<text class="s" x="300" y="404">unsolicited: MMP · watchdog · mass-cancel · session loss</text>
+<text class="s" x="220" y="396">unsolicited, real: a genuine OrderMassDelete message reaches</text>
+<text class="s" x="220" y="410">SimExchange -- CancelReason::MassDelete (execution.rs:207-213)</text>
 
-<polyline class="ln dash" points="660,72 690,72 690,40 1190,40 1190,530 815,530 815,490" marker-end="url(#a)"/>
-<text class="s e" x="1180" y="558">end of day (Lean) · GTD reached</text>
+<rect x="640" y="386" width="300" height="38" rx="4" fill="none" stroke="#C7CCDA" stroke-dasharray="3 3"/>
+<text class="s" x="660" y="399" font-style="italic" fill="#8B93A8">declared, never produced (execution.rs:196-205):</text>
+<text class="s" x="660" y="413" font-style="italic" fill="#8B93A8">Mmp &#183; Watchdog &#183; SessionLoss &#183; Risk &#183; EndOfDay</text>
 
-<text class="s" x="40" y="580">solid = normal path   ·   dashed = venue-initiated, unsolicited   ·   amber = in flight   ·   grey = terminal</text>
+<polyline class="ln dash" points="660,72 690,72 690,40 1190,40 1190,530 815,530 815,490" marker-end="url(#a)" stroke="#B8BECE"/>
+<text class="s e" x="1180" y="552" fill="#8B93A8" font-style="italic">mark_expired() -- from any is_open() state</text>
+<text class="s e" x="1180" y="566" fill="#8B93A8" font-style="italic">real &amp; tested, but zero live callers (no session-state driver yet)</text>
+
+<line x1="40" y1="598" x2="1200" y2="598" stroke="#E4E7EF" stroke-width="1"/>
+<text class="s" x="40" y="616">solid = drives on every real submit/fill/cancel/modify path &#183; blue = the normal, gate-passing path &#183; amber = a fill winning a real race</text>
+<text class="s" x="40" y="632">grey dashed = real, market-driven, unsolicited (a genuine OrderMassDelete) &#183; faint dashed italic = implemented but zero live callers, or an enum</text>
+<text class="s" x="40" y="646">variant nothing in the codebase ever constructs -- both honestly distinct from "doesn't exist," and from each other</text>
+
+<text class="s" x="40" y="670" fill="#8B93A8">Verified against: execution.rs (OrderState 74-98, DenyReason 149-169, CancelReason 196-205, request_cancel/modify_inner 1282-1334,</text>
+<text class="s" x="40" y="684" fill="#8B93A8">mark_expired_inner 1359-1368, handle_exec_reports 1427-1488, on_fill 1490-1542) &#183; simulator.rs (RejectReason 658-669, CancelReason 671-678)</text>
 </svg>

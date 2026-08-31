@@ -41,6 +41,7 @@ use crate::book::Book;
 use crate::cache::Cache;
 use crate::decoder::Trade;
 use crate::execution::{ExecOutcome, ExecutionEngine};
+use crate::simulator::SimExchange;
 use crate::strategy::{Ctx, Strategy, DEFAULT_STRATEGY_ID};
 use crate::types::{InstrumentId, PriceLevel};
 
@@ -157,7 +158,15 @@ impl EventDispatcher {
     /// `control_dispatcher::ControlDispatcher::dispatch` itself; this
     /// method never talks to `ControlDispatcher` directly (same
     /// independence D07 already asks of the two dispatchers).
-    pub fn on_book_touched(&mut self, book: &dyn Book, instrument: InstrumentId, cache: &Cache, engine: &mut ExecutionEngine, seq: u64, packet_transact_time_ns: u64) -> ExecOutcome {
+    /// `recorder_ts` (renamed from `packet_transact_time_ns`, dual-clock
+    /// replay, 2026-08-27): this is the canonical clock now (decision #2
+    /// of the planning session) -- "when qtrade found out", not the
+    /// exchange's own send time. `venue`: `Ctx` needs `&mut SimExchange`
+    /// directly if the strategy submits/cancels/modifies from this
+    /// callback -- the venue call is synchronous now (2026-08-27,
+    /// reversing the dual-clock pass's own scheduled-delivery design;
+    /// see `strategy.rs`'s own header).
+    pub fn on_book_touched(&mut self, book: &dyn Book, instrument: InstrumentId, cache: &Cache, engine: &mut ExecutionEngine, venue: &mut SimExchange, seq: u64, recorder_ts: u64) -> ExecOutcome {
         self.stats.book_touches += 1;
         let mut merged = ExecOutcome::default();
         let Some(depths) = self.by_instrument.get(&instrument) else {
@@ -193,8 +202,11 @@ impl EventDispatcher {
                 if let Some(ids) = self.subs_by_key.get(&(instrument, depth)) {
                     self.stats.wakes_fired += ids.len() as u64;
                     for &id in ids {
-                        let mut ctx = Ctx::new(cache, engine, packet_transact_time_ns, DEFAULT_STRATEGY_ID, true);
-                        self.handlers[id].borrow_mut().on_book(&mut ctx, instrument, seq, packet_transact_time_ns);
+                        // Reborrow, not move -- `venue` is used again on
+                        // the next loop iteration (and by `on_book`'s
+                        // caller, further down for other instruments).
+                        let mut ctx = Ctx::new(cache, engine, &mut *venue, recorder_ts, DEFAULT_STRATEGY_ID, true);
+                        self.handlers[id].borrow_mut().on_book(&mut ctx, instrument, seq, recorder_ts);
                         let produced = ctx.take_outcome();
                         merged.fills.extend(produced.fills);
                         merged.order_events.extend(produced.order_events);
@@ -212,7 +224,8 @@ impl EventDispatcher {
     /// instrument has a registered handler") since a trade has no depth
     /// of its own to key on. Same Phase C `ExecOutcome`-returning shape
     /// as `on_book_touched`, same reasoning.
-    pub fn on_trade(&mut self, cache: &Cache, engine: &mut ExecutionEngine, instrument: InstrumentId, trade: &Trade, seq: u64, packet_transact_time_ns: u64) -> ExecOutcome {
+    /// `recorder_ts`/`venue`: same reasoning as `on_book_touched`.
+    pub fn on_trade(&mut self, cache: &Cache, engine: &mut ExecutionEngine, venue: &mut SimExchange, instrument: InstrumentId, trade: &Trade, seq: u64, recorder_ts: u64) -> ExecOutcome {
         let mut merged = ExecOutcome::default();
         let Some(depths) = self.by_instrument.get(&instrument) else {
             return merged;
@@ -227,8 +240,8 @@ impl EventDispatcher {
         ids.dedup();
         for id in ids {
             self.stats.trades_fired += 1;
-            let mut ctx = Ctx::new(cache, engine, packet_transact_time_ns, DEFAULT_STRATEGY_ID, true);
-            self.handlers[id].borrow_mut().on_trade(&mut ctx, instrument, trade, seq, packet_transact_time_ns);
+            let mut ctx = Ctx::new(cache, engine, &mut *venue, recorder_ts, DEFAULT_STRATEGY_ID, true);
+            self.handlers[id].borrow_mut().on_trade(&mut ctx, instrument, trade, seq, recorder_ts);
             let produced = ctx.take_outcome();
             merged.fills.extend(produced.fills);
             merged.order_events.extend(produced.order_events);
@@ -244,7 +257,7 @@ mod tests {
     use crate::decoder::{DecodedMessage, OrderAdd, OrderModify, Price as DPrice, Qty as DQty, Side as DSide};
     use crate::execution::{AlwaysAllowRms, CostConfig, LocalOtrConfig, OtrConfigSummary, RunConfig};
     use crate::refdata::InstrumentMaster;
-    use crate::simulator::{OrderType, OtrConfig};
+    use crate::simulator::{OrderType, OtrConfig, SimExchange};
     use crate::strategy::StartCtx;
     use crate::types::{Currency, Date, InstrumentKind, Instrument, Lots, Price, Settlement, Side, Venue, YearMonth};
 
@@ -254,12 +267,16 @@ mod tests {
     /// A synthetic `ExecutionEngine` with no instruments registered --
     /// enough for tests that only need `Ctx::new` to compile and never
     /// call `submit`/`order`/`position`/etc. See `engine_with` below for
-    /// tests that actually exercise the execution path.
-    fn engine() -> ExecutionEngine {
+    /// tests that actually exercise the execution path. Returns
+    /// `(ExecutionEngine, SimExchange)` now -- `SimExchange` moved out to
+    /// `main.rs`'s own ownership in the real code (dual-clock replay,
+    /// 2026-08-27).
+    fn engine() -> (ExecutionEngine, SimExchange) {
         engine_with(vec![])
     }
 
-    fn engine_with(instruments: Vec<Instrument>) -> ExecutionEngine {
+    fn engine_with(instruments: Vec<Instrument>) -> (ExecutionEngine, SimExchange) {
+        let ids: Vec<InstrumentId> = instruments.iter().map(|i| i.id).collect();
         let run_config = RunConfig {
             session_id: 1,
             cost_config: CostConfig::default(),
@@ -268,7 +285,9 @@ mod tests {
             markout_horizons_ns: vec![],
         };
         let venue_otr = OtrConfig { window: std::time::Duration::from_secs(1), max_messages_per_window: 10_000, max_otr_ratio: 1_000_000.0 };
-        ExecutionEngine::new(run_config, instruments, Box::new(AlwaysAllowRms), CostConfig::default(), venue_otr, vec![], true)
+        let venue = SimExchange::new(&ids, venue_otr);
+        let eng = ExecutionEngine::new(run_config, instruments, Box::new(AlwaysAllowRms), CostConfig::default(), vec![], true);
+        (eng, venue)
     }
 
     fn add(id: i64, side: DSide, price: i64, qty: i64, prio: u64) -> DecodedMessage {
@@ -315,7 +334,7 @@ mod tests {
         let filter = InstrumentFilter::from_native_ids([467_013]);
         let master = InstrumentMaster::new(vec![future_instrument(467_013, "CRUDEOIL")]);
         let mut cache = Cache::new(master, filter);
-        let mut engine = engine();
+        let (mut engine, mut venue) = engine();
         cache.seed_book_band(InstrumentId(467_013), TEST_BAND.0, TEST_BAND.1);
 
         let book_calls = Rc::new(RefCell::new(0u32));
@@ -325,16 +344,16 @@ mod tests {
         dispatcher.subscribe(id, instrument, Depth::Bbo);
 
         cache.apply(&add(467_013, DSide::Buy, 5_000 * RUPEE_RAW, 10, 1));
-        dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, 1, 0);
+        dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, &mut venue, 1, 0);
         assert_eq!(*book_calls.borrow(), 1);
 
         // Deeper-level-only change: must not fire.
         cache.apply(&add(467_013, DSide::Buy, 4_990 * RUPEE_RAW, 50, 2));
-        dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, 2, 0);
+        dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, &mut venue, 2, 0);
         assert_eq!(*book_calls.borrow(), 1, "a deeper-level-only change must not fire on_book for a BBO subscriber");
 
         cache.apply(&add(467_013, DSide::Buy, 5_010 * RUPEE_RAW, 1, 3));
-        dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, 3, 0);
+        dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, &mut venue, 3, 0);
         assert_eq!(*book_calls.borrow(), 2);
     }
 
@@ -343,7 +362,7 @@ mod tests {
         let filter = InstrumentFilter::from_native_ids([467_013]);
         let master = InstrumentMaster::new(vec![future_instrument(467_013, "CRUDEOIL")]);
         let mut cache = Cache::new(master, filter);
-        let mut engine = engine();
+        let (mut engine, mut venue) = engine();
         cache.seed_book_band(InstrumentId(467_013), TEST_BAND.0, TEST_BAND.1);
         let instrument = InstrumentId(467_013);
         let mut dispatcher = EventDispatcher::new();
@@ -364,7 +383,7 @@ mod tests {
         let filter = InstrumentFilter::from_native_ids([467_013]);
         let master = InstrumentMaster::new(vec![future_instrument(467_013, "CRUDEOIL")]);
         let mut cache = Cache::new(master, filter);
-        let mut engine = engine();
+        let (mut engine, mut venue) = engine();
         cache.seed_book_band(InstrumentId(467_013), TEST_BAND.0, TEST_BAND.1);
         let instrument = InstrumentId(467_013);
         let book_calls = Rc::new(RefCell::new(0u32));
@@ -373,7 +392,7 @@ mod tests {
         dispatcher.subscribe(id, instrument, Depth::Bbo);
 
         cache.apply(&add(467_013, DSide::Sell, 5_200 * RUPEE_RAW, 10, 1));
-        dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, 1, 0);
+        dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, &mut venue, 1, 0);
         assert_eq!(*book_calls.borrow(), 1);
 
         cache.apply(&DecodedMessage::OrderModify(OrderModify {
@@ -388,7 +407,7 @@ mod tests {
             priority_ts: 2,
             event_time: 0,
         }));
-        dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, 2, 0);
+        dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, &mut venue, 2, 0);
         assert_eq!(*book_calls.borrow(), 2);
     }
 
@@ -397,7 +416,7 @@ mod tests {
         let filter = InstrumentFilter::from_native_ids([467_013]);
         let master = InstrumentMaster::new(vec![future_instrument(467_013, "CRUDEOIL")]);
         let mut cache = Cache::new(master, filter);
-        let mut engine = engine();
+        let (mut engine, mut venue) = engine();
         cache.seed_book_band(InstrumentId(467_013), TEST_BAND.0, TEST_BAND.1);
         let instrument = InstrumentId(467_013);
         let mut dispatcher = EventDispatcher::new();
@@ -405,9 +424,9 @@ mod tests {
         dispatcher.subscribe(id, instrument, Depth::Bbo);
 
         cache.apply(&add(467_013, DSide::Buy, 5_000 * RUPEE_RAW, 10, 1)); // touch + wake (None->Some)
-        dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, 1, 0);
+        dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, &mut venue, 1, 0);
         cache.apply(&add(467_013, DSide::Buy, 4_990 * RUPEE_RAW, 5, 2)); // touch, no wake (deeper level)
-        dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, 2, 0);
+        dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, &mut venue, 2, 0);
 
         assert_eq!(dispatcher.stats.book_touches, 2);
         assert_eq!(dispatcher.stats.wakes_fired, 1);
@@ -418,7 +437,7 @@ mod tests {
         let filter = InstrumentFilter::from_native_ids([467_013]);
         let master = InstrumentMaster::new(vec![future_instrument(467_013, "CRUDEOIL")]);
         let cache = Cache::new(master, filter);
-        let mut engine = engine();
+        let (mut engine, mut venue) = engine();
         let instrument = InstrumentId(467_013);
         let trade_calls = Rc::new(RefCell::new(0u32));
         let book_calls = Rc::new(RefCell::new(0u32));
@@ -427,8 +446,8 @@ mod tests {
         dispatcher.subscribe(id, instrument, Depth::Top(5));
 
         let t = trade(467_013, DSide::Buy, 305 * RUPEE_RAW, 5);
-        dispatcher.on_trade(&cache, &mut engine, instrument, &t, 1, 0);
-        dispatcher.on_trade(&cache, &mut engine, instrument, &t, 2, 0);
+        dispatcher.on_trade(&cache, &mut engine, &mut venue, instrument, &t, 1, 0);
+        dispatcher.on_trade(&cache, &mut engine, &mut venue, instrument, &t, 2, 0);
         assert_eq!(*trade_calls.borrow(), 2, "on_trade must fire once per real Trade message, unconditionally");
         assert_eq!(*book_calls.borrow(), 0, "on_trade must never call on_book");
         assert_eq!(dispatcher.stats.trades_fired, 2);
@@ -439,11 +458,11 @@ mod tests {
         let filter = InstrumentFilter::from_native_ids([467_013]);
         let master = InstrumentMaster::new(vec![future_instrument(467_013, "CRUDEOIL")]);
         let cache = Cache::new(master, filter);
-        let mut engine = engine();
+        let (mut engine, mut venue) = engine();
         let mut dispatcher = EventDispatcher::new();
         // No subscribe() call at all -- by_instrument has no entry.
         let t = trade(467_013, DSide::Buy, 305 * RUPEE_RAW, 5);
-        dispatcher.on_trade(&cache, &mut engine, InstrumentId(467_013), &t, 1, 0); // must not panic, must not fire anything
+        dispatcher.on_trade(&cache, &mut engine, &mut venue, InstrumentId(467_013), &t, 1, 0); // must not panic, must not fire anything
         assert_eq!(dispatcher.stats.trades_fired, 0);
     }
 
@@ -491,7 +510,7 @@ mod tests {
         let master = InstrumentMaster::new(vec![future_instrument(native_id, "CRUDEOIL")]);
         let mut cache = Cache::new(master, filter);
         cache.seed_book_band(instrument, TEST_BAND.0, TEST_BAND.1);
-        let mut engine = engine_with(vec![engine_instrument(native_id)]);
+        let (mut engine, mut venue) = engine_with(vec![engine_instrument(native_id)]);
 
         let last_order_id = Rc::new(RefCell::new(None));
         let last_position = Rc::new(RefCell::new(0i64));
@@ -500,14 +519,20 @@ mod tests {
         dispatcher.subscribe(id, instrument, Depth::Bbo);
 
         cache.apply(&add(native_id, DSide::Buy, 5_000 * RUPEE_RAW, 10, 1));
-        let outcome = dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, 1, 0);
+        let outcome = dispatcher.on_book_touched(cache.book(instrument).unwrap(), instrument, &cache, &mut engine, &mut venue, 1, 0);
 
         assert!(last_order_id.borrow().is_some(), "ctx.submit() from on_book must succeed");
-        // Two real order-events for one resting LimitDay submit: "submit:
-        // gates passed" (submit_order_inner's own log_event), then
-        // "resting" (handle_exec_reports's ExecReport::Resting branch) --
-        // both must come back in on_book_touched's ExecOutcome, never
-        // returned directly to the strategy (Q2).
+        // Two real order-events (2026-08-27, "send as fast as possible"
+        // reversal of the dual-clock pass's own scheduled-delivery
+        // design): `ctx.submit()` now calls all the way through to the
+        // venue in the same instant its local gates pass -- "submit:
+        // gates passed" (Submitted) immediately followed by "resting"
+        // (Accepted), since `venue`'s own book here is empty (nothing to
+        // sweep against). There is no separate scheduled delivery step
+        // left to drive by hand any more; `SimExchange::with_order_latency`
+        // (unused here -- this `venue` has the default zero latency) is
+        // the only remaining seam that could make this call *not*
+        // resolve synchronously.
         assert_eq!(outcome.order_events.len(), 2);
         assert_eq!(*last_position.borrow(), 0, "no fill has happened yet -- ctx.position() must still read flat");
     }

@@ -2,64 +2,52 @@
 
 **What this component does, in one sentence:** a priority-queue event loop and `SimClock` that make a backtest reproducible — pop the earliest event, advance simulated time to it, dispatch; nothing else in qtrade is allowed to move time.
 
-Code: [`scheduler.rs`](scheduler.rs) (this folder). Not yet wired into `qtrade/src/main.rs` — that happens separately, once this and the other in-flight components land. Until then, verify it the way §1 below shows: compiled and run standalone with `rustc`.
+Code: [`scheduler.rs`](scheduler.rs) (this folder). **Wired into `main.rs` for real as of the dual-clock replay pass (2026-08-27)** — `main.rs`'s own replay loop constructs `Scheduler::new()` directly and drives it (`schedule`/`pop_earliest`/`peek_earliest_timestamp`); this file went from "built, zero real callers" to the actual mechanism `main.rs` runs on, unchanged internally except for `EventPayload` finally carrying real data (§4) and one new method (`peek_earliest_timestamp`, §2). See `main_user_doc.md` for the full account of *why* (real, measured feed latency; see `feed_replay_user_doc.md`) and exactly how `main.rs`'s loop uses it.
 
 ---
 
 ## 1. How to run it
 
-This crate's `Cargo.toml` only builds `src/main.rs` today, and `main.rs` doesn't reference `scheduler` yet. `scheduler.rs` has no dependency on anything outside `std`, so it can be compiled and its tests run directly, without touching `main.rs` or `Cargo.toml`:
+Ordinary `cargo test` now — no standalone `rustc` invocation needed, `scheduler` is declared in `main.rs`'s own module tree the same way `decoder`/`types` are:
 
 ```bash
-source "$HOME/.cargo/env"     # once per new terminal, puts cargo/rustc on PATH
-cd qtrade/src/scheduler
-rustc --edition 2021 --test scheduler.rs -o /tmp/scheduler_test
-/tmp/scheduler_test --test-threads=1 --nocapture
+cd qtrade
+cargo test --release scheduler::
 ```
 
-Once another change wires this in as `#[path = "scheduler/scheduler.rs"] mod scheduler;` in `main.rs` (the same pattern `decoder` and `types` already use), the same tests run the ordinary way too: `cargo test`.
-
-Real output from the command above, captured while building this component (see §6 for what each test is proving):
+Real output, captured after the dual-clock replay pass (see §6 for what each test is proving):
 
 ```
 running 5 tests
-test tests::clock_now_before_start_panics_instead_of_defaulting - should panic ... ok
-test tests::clock_rejects_moving_backward - should panic ... ok
-test tests::determinism_two_runs_are_byte_identical ... --- run A ---
-now=1000                 dispatch: t=1000                 class=MARKET_DATA seq=0      MarketData(instrument=1, seq=1)
+test scheduler::tests::clock_now_before_start_panics_instead_of_defaulting - should panic ... ok
+test scheduler::tests::clock_rejects_moving_backward - should panic ... ok
+test scheduler::tests::determinism_two_runs_are_byte_identical ... --- run A ---
+now=1000                 dispatch: t=1000                 class=MARKET_DATA seq=0      MarketData(target=Cache, seq=1, exchange_ts=0, recorder_ts=0)
 now=1000                 dispatch: t=1000                 class=STRATEGY_TIMER seq=1      StrategyTimer(quote_refresh)
-now=1500                 dispatch: t=1500                 class=MARKET_DATA seq=2      MarketData(instrument=2, seq=2)
-now=1750                 dispatch: t=1750                 class=ORDER_ARRIVAL seq=5      OrderArrival(client_order_id=42)
-now=2000                 dispatch: t=2000                 class=MARKET_DATA seq=4      MarketData(instrument=1, seq=3)
+now=1500                 dispatch: t=1500                 class=MARKET_DATA seq=2      MarketData(target=Cache, seq=2, exchange_ts=0, recorder_ts=0)
+now=1750                 dispatch: t=1750                 class=ORDER_ARRIVAL seq=5      OrderArrival(op_id=42)
+now=2000                 dispatch: t=2000                 class=MARKET_DATA seq=4      MarketData(target=Cache, seq=3, exchange_ts=0, recorder_ts=0)
 now=2000                 dispatch: t=2000                 class=STRATEGY_TIMER seq=3      StrategyTimer(risk_check)
 
---- run B ---
-now=1000                 dispatch: t=1000                 class=MARKET_DATA seq=0      MarketData(instrument=1, seq=1)
-now=1000                 dispatch: t=1000                 class=STRATEGY_TIMER seq=1      StrategyTimer(quote_refresh)
-now=1500                 dispatch: t=1500                 class=MARKET_DATA seq=2      MarketData(instrument=2, seq=2)
-now=1750                 dispatch: t=1750                 class=ORDER_ARRIVAL seq=5      OrderArrival(client_order_id=42)
-now=2000                 dispatch: t=2000                 class=MARKET_DATA seq=4      MarketData(instrument=1, seq=3)
-now=2000                 dispatch: t=2000                 class=STRATEGY_TIMER seq=3      StrategyTimer(risk_check)
+--- run B --- (identical to run A, omitted)
 
 final clock A=2000 B=2000
 ok
-test tests::pop_earliest_on_empty_queue_is_none_and_ends_the_loop ... ok
-test tests::ties_resolve_deterministically_and_repeatably ... --- tie-break run 1 ---
-now=5000 seq=0 class=MARKET_DATA MarketData(instrument=99, seq=100)
-now=5000 seq=1 class=MARKET_DATA MarketData(instrument=99, seq=101)
-now=6000 seq=3 class=MARKET_DATA MarketData(instrument=5, seq=200)
-now=6000 seq=2 class=ORDER_ARRIVAL OrderArrival(client_order_id=7)
+test scheduler::tests::pop_earliest_on_empty_queue_is_none_and_ends_the_loop ... ok
+test scheduler::tests::ties_resolve_deterministically_and_repeatably ... --- tie-break run 1 ---
+now=5000 seq=0 class=MARKET_DATA MarketData(target=Cache, seq=100, exchange_ts=0, recorder_ts=0)
+now=5000 seq=1 class=MARKET_DATA MarketData(target=Cache, seq=101, exchange_ts=0, recorder_ts=0)
+now=6000 seq=3 class=MARKET_DATA MarketData(target=Cache, seq=200, exchange_ts=0, recorder_ts=0)
+now=6000 seq=2 class=ORDER_ARRIVAL OrderArrival(op_id=7)
 
---- tie-break run 2 ---
-now=5000 seq=0 class=MARKET_DATA MarketData(instrument=99, seq=100)
-now=5000 seq=1 class=MARKET_DATA MarketData(instrument=99, seq=101)
-now=6000 seq=3 class=MARKET_DATA MarketData(instrument=5, seq=200)
-now=6000 seq=2 class=ORDER_ARRIVAL OrderArrival(client_order_id=7)
+--- tie-break run 2 --- (identical, omitted)
 
 ok
 
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
+
+`op_id` (renamed from `client_order_id`, dual-clock replay 2026-08-27) is deliberately opaque -- a cancel/modify delivery isn't "a new order," and this module never interprets the value either way; `main.rs` looks it up in its own pending-ops table. `MarketData`'s `target`/`exchange_ts`/`recorder_ts` fields are real now too (§4) -- these tests just leave them at defaults (`Cache`/`0`/`0`) since they're testing ordering, not real timestamps.
 
 Run A and run B are the literal `String` outputs of two independent calls to the same function with the same fixed input; the test asserts them equal with `assert_eq!` before printing them, so `ok` above already means byte-identical — the printed logs are shown for a human to double-check, not in place of the assertion.
 
@@ -114,20 +102,22 @@ Within the same `(timestamp, event_class)`, the event enqueued first wins. `Sche
 
 ## 4. What can be scheduled
 
-`EventPayload` (in `scheduler.rs`) is the data an `Event` carries; `EventClass` (§3.1) is only the ordering tag. FR-B14 lists every source this queue accepts; this phase actually has test producers for two of them, and carries the rest as shape only:
+`EventPayload` (in `scheduler.rs`) is the data an `Event` carries; `EventClass` (§3.1) is only the ordering tag. FR-B14 lists every source this queue accepts; three are real and wired as of the dual-clock replay pass (2026-08-27), the rest remain shape only:
 
-| Source (FR-B14) | `EventClass` | `EventPayload` variant | Status this phase |
+| Source (FR-B14) | `EventClass` | `EventPayload` variant | Status |
 |---|---|---|---|
-| Market data from the Sequencer | `MarketData` | `MarketData { instrument, sequence }` | **Synthesized in tests.** Real decoded/book-applied events arrive once `book` (a later component) exists; the payload shape will change to carry a real book delta, but nothing about the loop or ordering changes. |
-| Strategy timers and alarms | `StrategyTimer` | `StrategyTimer { label }` | **Synthesized in tests.** Represents a strategy's `set_timer`/`set_alarm`, before Strategy/Cache (T05) exist to call it for real. |
-| Order arrival (`T + outbound latency`) | `OrderArrival` | `OrderArrival { client_order_id }` | **Shape only.** Nothing computes a real outbound-latency offset yet — that's `simulator` (T06). `scheduler.rs`'s determinism test schedules one by hand (`event.timestamp + 250`) purely to prove the event type can represent "fires at a future timestamp" generically — see §5. |
-| Report delivery (`T + inbound latency`) | `ReportDelivery` | `ReportDelivery { client_order_id }` | **Shape only**, same status as `OrderArrival`. |
+| Market data, per real event | `MarketData` | `MarketData { target: Target, message: DecodedMessage, seq_no, exchange_ts, recorder_ts }` | **Real.** `target` (`SimExchange` or `Cache`, a new local enum) is the one addition beyond a plain decoded message -- the same real event is scheduled *twice*, once per target, at two different real timestamps (`main.rs` does this; see `main_user_doc.md`). `DecodedMessage` is the one dependency this module takes on beyond `std` (`use crate::decoder::DecodedMessage;`) -- still well below `cache`/`execution`/`simulator` in the stack. |
+| Order arrival (`T + outbound latency`) | `OrderArrival` | `OrderArrival { op_id }` | **Real.** `op_id` is deliberately opaque -- `strategy::Ctx::submit`/`cancel`/`modify` schedule these (at `ctx.now() + latency_ns`, a flat config constant for now, D18's `LatencyModel` later), keyed into `main.rs`'s own pending-ops table (`strategy::PendingVenueOp`), which this module never reads. |
+| Report delivery (`T + inbound latency`) | `ReportDelivery` | `ReportDelivery { op_id }` | **Real**, same opaque convention. `main.rs` schedules these whenever a venue call (market-event-driven or order-driven) produces a non-empty `ExecOutcome`, keyed by its own monotonic counter (not `client_order_id` -- more than one order's report can be in flight at once). |
+| Strategy timers and alarms | `StrategyTimer` | `StrategyTimer { label }` | **Synthesized in tests only.** Represents a strategy's `set_timer`/`set_alarm` -- still unbacked; nothing in `main.rs` calls it. |
 | Session transitions | `SessionTransition` | `SessionTransition { session }` | **Shape only** — no session-state source exists yet. |
 | Staleness / heartbeat timeouts | `StalenessOrHeartbeatTimeout` | `StalenessTimeout` | **Shape only.** |
 | Watchdog expiry | `WatchdogExpiry` | `WatchdogExpiry` | **Shape only.** |
 | Offload completion | `OffloadCompletion` | `OffloadCompletion` | **Shape only** — matches FR-B14's own table, which lists this as "scaffold only" even for phase 1's full scope. |
 
-**Why "shape only" is a real, checked claim and not just a placeholder comment:** a scheduler whose event type can only represent "fires now, at the current dispatch" would need restructuring the day `simulator` (T06) starts computing real latencies. `schedule(timestamp, event_class, payload)` already accepts *any* future `timestamp` for *any* `event_class` — there is no separate "immediate" vs "delayed" code path to add later. `simulator` will call `schedule` with a computed `T + latency` instead of a literal `+ 250`; nothing else changes. This is exercised, not asserted: see the `OrderArrival` scheduled mid-dispatch in `determinism_two_runs_are_byte_identical` (§6).
+**Dispatch pattern-matching lives in `main.rs`, not here.** `main.rs`'s own `dispatch_event` function (not a method on `Scheduler`) matches a popped `Event`'s payload and calls the right thing -- `venue.apply_market_event(...)`, `event_dispatcher.on_book_touched(...)`, `engine.deliver_order(...)`, `control_dispatcher.dispatch(...)`. This keeps D07's rule intact ("routing knowledge lives in startup wiring, never inside either dispatcher") extended to this component too: `scheduler.rs` never gained a `cache`/`execution`/`simulator` dependency, only `decoder`.
+
+**A new read-only method, added for `main.rs`'s own use:** `peek_earliest_timestamp(&self) -> Option<Timestamp>` -- the earliest queued event's timestamp without popping it, letting `main.rs` decide *when* it's safe to drain (see `main_user_doc.md`'s account of the read-ahead/drain interleaving between file records and scheduled events) without a pop-then-push-back dance.
 
 ---
 
@@ -158,11 +148,9 @@ All five tests, run twice each by construction (`--test-threads=1` just serializ
 
 ## 7. What this component deliberately does not do
 
-- No Cache, no read model for strategies — that's T05.
-- No dispatch-to-strategy logic — `Scheduler::run()`'s `dispatch` parameter is a generic closure; nothing here knows what a `Strategy` is.
-- No latency model — `OrderArrival`/`ReportDelivery` exist as `EventClass`/`EventPayload` shapes only; nothing computes `T + latency` here. That's `simulator` (T06).
+- No Cache, no read model for strategies, no `cache`/`execution`/`simulator` dependency — dispatch pattern-matching lives in `main.rs`'s own `dispatch_event` function (§4), not here. `Scheduler::run()`'s `dispatch` parameter stays a generic closure; nothing here knows what a `Strategy` is. (`main.rs`'s real loop doesn't even use `run()` — it needs to interleave popping with reading more file records, which `run()`'s "drain everything" shape doesn't fit; `run()` stays available, just not this particular caller's choice.)
+- No real `LatencyModel` (D18) yet — `main.rs` computes `OrderArrival`/`ReportDelivery` timestamps from one flat, config-driven constant (`cfg.run.latency_ns`), not a real per-venue/per-direction model. The event *shape* has always supported an arbitrary future timestamp regardless of how it's computed; swapping in `Fixed`/`Sampled` later touches the caller, not this file.
 - No `LiveClock` — D30 anticipates one, phase 1 doesn't need it, and building it now would be exactly the speculative work this milestone excludes.
 - No wall-clock conversion anywhere — `Timestamp` stays on its own monotonic axis end to end (§5).
-- Not wired into `main.rs` — that's a separate, later change; see §1 for how to run this component's own tests until then.
 
 These are scope boundaries, not missing features waiting to be discovered as bugs.

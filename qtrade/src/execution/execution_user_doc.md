@@ -38,9 +38,14 @@ the race below constructible rather than a hypothetical edge case.
 A cancel is modelled as two phases, matching how a real message actually
 travels: `request_cancel` marks the order `PendingCancel` locally — the
 cancel has been *decided*, not yet *delivered* — and only
-`deliver_cancel_to_venue` actually calls `SimExchange::cancel`, at
-whatever later, latency-adjusted simulated instant the scheduler fires
-that leg's arrival (T04/D36). `SimExchange` itself has no notion of
+`deliver_cancel_to_venue` actually calls `SimExchange::cancel`. As of the
+2026-08-27 dual-clock pass this is no longer just a documented intention:
+`main.rs` genuinely schedules the deliver phase as a real `OrderArrival`
+event on `scheduler::Scheduler`, `latency_ns` after the request, and only
+fires `deliver_cancel_to_venue` (now taking `venue: &mut SimExchange` as
+an explicit parameter, since `ExecutionEngine` no longer owns a `venue`
+field at all — see §6.1) when that event is popped in real timestamp
+order. `SimExchange` itself has no notion of
 "pending cancel" — it only knows what's actually resting in its book —
 so a real trade can fill an order at the venue in the gap between phase
 1 and phase 2. `handle_exec_reports`'s `Filled` arm makes the resolution
@@ -75,29 +80,40 @@ scenario, not an incidental test.
 
 ## 2. Three gates, two rejection paths (FR-B27, D36)
 
-`submit_order` runs, in order: an instrument-registry lookup, **Order
+**Since the 2026-08-27 dual-clock pass, this is a genuine two-phase call, not one method.** `submit_order_local` runs, in order: an instrument-registry lookup, **Order
 Validation** (tick size, freeze quantity — stateless, D17), **RMS**
 (`trait Rms`, phase 1's `AlwaysAllowRms` always returns `true` — the call
 site exists now so a real margin/cash-aware implementation slots in
 later without touching this component, D34), then the **engine's own
 local OTR/message-rate governor** (`LocalOtrGovernor`, independent state
 from `SimExchange`'s own governor — D19: "they do not share state,
-preserving the venue independence of D10"). Any of these failing returns
+preserving the venue independence of D10"). This whole gate sequence
+takes `venue: &SimExchange` **read-only** (for `pre_submit_best_same_side`)
+— it can look at the book but cannot touch it. Any gate failing returns
 `GateOutcome::Denied` **synchronously**, with an `Order` record created
 in state `Denied` (terminal) and `deny_reason` set — and, critically, no
-call to `self.venue.submit(...)` at all. `tick_size_violation_...` and
+call into the venue's own `submit` at all. `tick_size_violation_...` and
 `freeze_qty_violation_...` both assert `eng.venue_submit_calls() == 0`
 from outside, which is the only way to actually prove "never reached the
 venue" rather than merely asserting an error variant.
 
-An order that passes all three gates gets `GateOutcome::Submitted`, and
-*only then* does `self.venue.submit(...)` get called — genuinely reaching
-`SimExchange`, which can refuse it on its own grounds (a `BookOrCancel`
-that would cross, an unknown instrument, its own OTR breach). That
+An order that passes all three gates gets `GateOutcome::Submitted` and a
+real `NewOrderRequest` back from `submit_order_local` — but delivery to
+the venue does **not** happen in the same call any more. The caller
+(`strategy::Ctx::submit`, in practice) schedules that request as a real
+`OrderArrival` event on the `Scheduler`, `latency_ns` later; only when
+that event fires does `main.rs` call `deliver_order(req, now_ns, venue: &mut SimExchange)`,
+which is what actually reaches `SimExchange`, which can refuse it on its
+own grounds (a `BookOrCancel` that would cross, an unknown instrument,
+its own OTR breach). That
 refusal arrives as an `ExecReport::Rejected` and is handled in
 `handle_exec_reports`, moving the order to `Rejected` (terminal,
 `reject_reason` set, `deny_reason` stays `None`) — a field and a state
-entirely separate from `Denied`.
+entirely separate from `Denied`. This split is D36/Q9's "gate check is
+synchronous, venue response is a scheduled event" made real rather than
+a zero-latency accident of the old single-call shape; see
+`main_user_doc.md` §3 item 6 for how the scheduling itself works, and
+`strategy/README.md` for `Ctx::submit`'s own side.
 
 `venue_rejection_is_a_genuinely_different_terminal_state_from_denied`
 makes both paths concrete side by side: a `BookOrCancel` buy priced to
@@ -263,45 +279,43 @@ which doesn't exist on `strategy::Ctx` yet (out of scope, same as this
 task's brief states) — a different gap from live fill/order-event
 delivery, which is real now (see §6.1).
 
-### 6.1 `ExecOutcome` — live delivery, not just end-of-run reporting (2026-08-25)
+### 6.1 `ExecOutcome` — live delivery, not just end-of-run reporting (2026-08-25, method shapes updated 2026-08-27)
 
-Until this pass, `fills()`/`order_events()` were read-only accessors a
+Until the 2026-08-25 pass, `fills()`/`order_events()` were read-only accessors a
 caller queried once, after a run finished — the data existed live
 (pushed the instant `handle_exec_reports`/`log_event` decide something
 happened) but nothing was *notified*. `control_dispatcher` needed a way
 to receive "what just happened," so each mutating method that can
-produce a fill or order-event (`submit_order`, `on_market_event`,
-`request_cancel`, `deliver_cancel_to_venue`, `request_modify`,
-`deliver_modify_to_venue`, `mark_expired`) now returns an `ExecOutcome`
+produce a fill or order-event now returns an `ExecOutcome`
 alongside its original result:
 
 ```rust
 pub struct ExecOutcome { pub fills: Vec<FillRecord>, pub order_events: Vec<OrderEventRecord> }
-
-pub fn submit_order(&mut self, intent: NewOrderIntent, now_ns: u64) -> (GateOutcome, ExecOutcome) {
-    let (fills_before, events_before) = (self.fills.len(), self.order_events.len());
-    let outcome = self.submit_order_inner(intent, now_ns);   // original body, renamed, unchanged
-    (outcome, ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() })
-}
 ```
 
-Every one of the seven methods follows this exact shape: snapshot
-`self.fills`/`self.order_events`' lengths, call the renamed `..._inner`
-(the pre-existing, unchanged logic), slice off whatever got added.
-`handle_exec_reports`/`on_fill`/`log_event`/`deny` themselves are
-**untouched** — this is a thin wrapper at the public boundary, not a new
-accounting path, and every one of this file's existing tests still
-passes with only mechanical call-site updates (`eng.submit_order(...)`
-returning a tuple now, ~35 call sites here, ~14 more in
-`execution-validate`).
+**The method list itself changed shape in the 2026-08-27 dual-clock pass** —
+`submit_order`/`on_market_event` no longer exist. In their place:
+
+- `submit_order_local(&mut self, intent, now_ns, venue: &SimExchange) -> (GateOutcome, Option<NewOrderRequest>, ExecOutcome)` — the gate-only half (§2); never touches the venue mutably, only reads it for `pre_submit_best_same_side`.
+- `deliver_order(&mut self, req: NewOrderRequest, now_ns, venue: &mut SimExchange) -> ExecOutcome` — the venue-reaching half, called only when the scheduled `OrderArrival` event fires.
+- `prepare_for_market_event(&mut self, venue: &SimExchange)` — the qty-ahead-capture/message-count bookkeeping `on_market_event` used to do before applying an event (§7); the actual `venue.apply_market_event(...)` call now happens directly in `main.rs`, not inside `ExecutionEngine`.
+- `apply_venue_reports(&mut self, reports: Vec<ExecReport>, now_ns) -> ExecOutcome` — wraps `handle_exec_reports` for whatever reports a market event or a delivered order produced.
+- `deliver_cancel_to_venue`/`deliver_modify_to_venue` — unchanged in name, but now take `venue: &mut SimExchange` as an explicit parameter (replacing the old `self.venue`) — `ExecutionEngine` no longer owns a venue at all; `main.rs` does (see `main_user_doc.md` §3 item 6).
+
+Every one of these follows the same shape the original seven did: snapshot
+`self.fills`/`self.order_events`' lengths, call the real (unrenamed, in most
+cases) logic, slice off whatever got added.
+`handle_exec_reports`/`on_fill`/`log_event`/`deny` themselves remain
+**untouched** by either pass — this is still a thin wrapper at the public
+boundary, not a new accounting path.
 
 **A real, discussed alternative was not taken:** `main.rs` could instead
 diff `engine.fills()`/`engine.order_events()`'s lengths itself, before
-and after calling `on_market_event`, with zero changes to this file at
+and after calling into the venue, with zero changes to this file at
 all. Both options deliver identically to a strategy through
 `control_dispatcher` — the choice here was for `ExecutionEngine` itself
 to be the source of truth for "what did this call just produce," at the
-accepted cost of the ~50 call-site updates above.
+accepted cost of the call-site updates each pass required.
 
 ## 7. The queue-position bug: found, root-caused, fixed
 
@@ -512,8 +526,15 @@ shortcut taken in place of a harder real-data check.
 
 Run: `cargo run --bin execution-validate` (prints all five scenarios and
 a pass/fail summary); `cargo test --bin execution-validate` runs
-`execution.rs`'s own 18 unit tests plus `simulator.rs`'s 18 (pulled in
-transitively) — 36 total, all passing.
+`execution.rs`'s own unit tests plus `simulator.rs`'s (pulled in
+transitively), all passing. Since the 2026-08-27 dual-clock pass, this file's
+own `engine(...)` test helper returns `(ExecutionEngine, SimExchange)` as a
+pair (not just an `ExecutionEngine`) — every test now owns its own venue
+explicitly and passes `&venue`/`&mut venue` into whichever split method it's
+exercising, plus `submit_order_sync`/`on_market_event_sync` test-only helpers
+that recombine the two-phase `submit_order_local`+`deliver_order` (and
+market-event) calls into one synchronous call for tests that only care about
+gate/accounting outcomes, not the Scheduler's own timing.
 
 ## 10. What this component deliberately does not do
 
@@ -522,7 +543,7 @@ transitively) — 36 total, all passing.
 - No margin or cash checks — a later, real `Rms` implementation's job
   (D34's own explicit deferral); `AlwaysAllowRms` exists so the call site
   is real today.
-- ~~No `Strategy` trait / strategy-authoring API~~ — **partially superseded, 2026-08-25**: `event_dispatcher::MarketHandler` and `control_dispatcher::ControlHandler` are real now (see §6.1 and each component's own doc). Still no `ctx.submit()`/`ctx.cancel()` on `strategy::Ctx` — a strategy can *receive* fills/order-updates live, but still can't *cause* one through the `Ctx` handle; that remains separate follow-on work.
+- ~~No `Strategy` trait / strategy-authoring API~~ — **superseded**: `event_dispatcher::MarketHandler` and `control_dispatcher::ControlHandler` were real as of 2026-08-25 (see §6.1 and each component's own doc); `ctx.submit()`/`ctx.cancel()`/`ctx.modify()` on `strategy::Ctx` are real too, as of 2026-08-27 — a strategy can both cause and receive order events through the one `Ctx` handle now, with the local gate check synchronous and the venue-reaching half a scheduled event (§2). Nothing left un-superseded from this original bullet.
 - No Tier 3 (strategy-published series) — nothing exists yet to publish
   from.
 - ~~No `main.rs` wiring~~ — **superseded, 2026-08-25**: `main.rs` is the one real entry point now (see `main_user_doc.md`); this component's own validation binary (`execution-validate`) remains, for the same reason `book-validate`/`cache-validate`/`simulator-validate` still do.
@@ -530,6 +551,7 @@ transitively) — 36 total, all passing.
   a hardcoded literal and `RunConfig::hash()` is a `Debug`-formatted
   `DefaultHasher` hash, both explicitly permitted as placeholders by this
   milestone's own acceptance bar.
+- **Does not own a `SimExchange` any more (2026-08-27)** — this is new, not a correction of an old bullet: `ExecutionEngine` used to construct and hold its own venue; as of the dual-clock pass, `main.rs` owns the one real `SimExchange` and passes `&SimExchange`/`&mut SimExchange` into whichever `execution.rs` method needs it for that one call (§6.1) — the same borrowed-through pattern `ControlDispatcher::subscribe` already used for `EventDispatcher`. `ExecutionEngine::new`'s signature dropped its `venue_otr_cfg` parameter accordingly.
 
 ## 11. `Lots` vs `Qty`, a third time: realised/unrealised P&L was 100x wrong
 

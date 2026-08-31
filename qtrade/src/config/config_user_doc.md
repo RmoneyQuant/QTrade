@@ -27,6 +27,20 @@ report_dir            = "logs/qtrade" # required. Parent of this run's own times
 max_outer_records     = 0            # optional, default 0 (no limit -- full file, start to end).
 max_feed_stdout_lines = 200          # optional, default 200. How many feed.csv lines also
                                       # echo to stdout while a run is in progress.
+latency_ns            = 100000       # optional, default 0. Flat, config-driven order/report
+                                      # latency (dual-clock replay, 2026-08-27) -- applied
+                                      # symmetrically to every OrderArrival/ReportDelivery
+                                      # scheduled event. Default 0 is a legitimate value
+                                      # (today's old zero-latency behavior, as a special
+                                      # case) but any real run should set this explicitly.
+                                      # A real probabilistic LatencyModel (D18) is separate,
+                                      # later work -- this is one flat constant for now.
+max_feed_delta_ns     = 250000000    # optional, default 250,000,000 (250ms). The Q1
+                                      # outlier ceiling on recorder_ts - exchange_ts: a
+                                      # negative delta, or one past this ceiling, is a hard
+                                      # run failure (never clamped) -- see feed_replay's own
+                                      # doc §2a for why a real capture file can trip this on
+                                      # a bad day (recorded before ~2026-08-20).
 
 [deployment]
 # Inert today. No live feed source or exchange gateway exists in this
@@ -44,6 +58,6 @@ This project has had zero external dependencies from the start (no `[dependencie
 
 ## 4. What this component deliberately does not do
 
-- Does not support multiple strategies yet (`[[run.strategy]]` as an array, per `BACKTEST-PHASE1.md`'s own example) — only one strategy (`limit_order_book_generator`) is plugged into `main.rs` at a time today, and which one is compiled in is a source-code edit to `main.rs`'s own `mod`/`use` lines, not a config field. Real multi-strategy config is D08's "a backtest run must declare its full strategy set," deferred until more than one real strategy exists.
-- Does not expose `CostConfig`/`LocalOtrConfig`/latency-model parameters as config fields yet — `main.rs` still uses their `::default()`s. Real future work, not blocking today's merge.
+- Does not support multiple strategies yet (`[[run.strategy]]` as an array, per `BACKTEST-PHASE1.md`'s own example) — only one strategy (`naturalgas_bracket`, as of 2026-08-27) is plugged into `main.rs` at a time today, and which one is compiled in is a source-code edit to `main.rs`'s own `mod`/`use` lines, not a config field. Real multi-strategy config is D08's "a backtest run must declare its full strategy set," deferred until more than one real strategy exists.
+- Does not expose `CostConfig`/`LocalOtrConfig` as config fields yet — `main.rs` still uses their `::default()`s. **Partially superseded, 2026-08-27**: `latency_ns`/`max_feed_delta_ns` (above) are real `[run]` fields now, the first two "run behavior" numbers to move out of a hardcoded default — but both are flat constants, not the eventual probabilistic `LatencyModel` (D18), which remains real future work.
 - Does not populate any real `[deployment]` field — CTCL credential shape and MCX ETI endpoint details aren't pinned down yet, and there's no live-mode consumer to hand them to.

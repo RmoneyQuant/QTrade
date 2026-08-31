@@ -37,9 +37,18 @@ mod event_dispatcher;
 #[allow(dead_code)]
 #[path = "../simulator/simulator.rs"]
 mod simulator;
+// `strategy` now depends on `scheduler` (dual-clock replay, 2026-08-27:
+// `Ctx`/`RunHandles` need `Scheduler`/`EventClass`/`EventPayload` to
+// schedule a deliver-phase event from `submit`/`cancel`/`modify`) --
+// pulled in purely to satisfy that, same reasoning as `simulator` above.
+#[allow(dead_code)]
+#[path = "../scheduler/scheduler.rs"]
+mod scheduler;
 #[allow(dead_code)]
 #[path = "../execution/execution.rs"]
 mod execution;
+#[path = "../logging/logging.rs"]
+mod logging;
 #[path = "../control_dispatcher/control_dispatcher.rs"]
 mod control_dispatcher;
 #[path = "../strategy/strategy.rs"]
@@ -189,7 +198,7 @@ struct RunCounters {
     dispatch_alloc_bytes: u64,
 }
 
-fn stream_file(label: &str, path: &str, cache: &mut Cache, dispatcher: &mut EventDispatcher, engine: &mut execution::ExecutionEngine, stop_after: Option<u64>) -> io::Result<RunCounters> {
+fn stream_file(label: &str, path: &str, cache: &mut Cache, dispatcher: &mut EventDispatcher, engine: &mut execution::ExecutionEngine, venue: &mut simulator::SimExchange, stop_after: Option<u64>) -> io::Result<RunCounters> {
     let mut source = RecordSource::open(path)?;
     let mut payload = Vec::new();
     let mut counters = RunCounters::default();
@@ -219,7 +228,11 @@ fn stream_file(label: &str, path: &str, cache: &mut Cache, dispatcher: &mut Even
                 counters.apply_alloc_bytes += b1 - b0;
 
                 if let Some(book) = cache.book(instrument) {
-                    dispatcher.on_book_touched(book, instrument, cache, engine, seq as u64, 0);
+                    // `venue` passed directly now (2026-08-27, second
+                    // pass) -- `Ctx` holds `&mut SimExchange` itself, no
+                    // `RunHandles`/`Scheduler` involved; `NoOpStrategy`
+                    // never calls `ctx.submit` anyway.
+                    dispatcher.on_book_touched(book, instrument, cache, engine, venue, seq as u64, 0);
                 }
 
                 let (a2, b2) = alloc_snapshot();
@@ -334,7 +347,11 @@ fn main() -> io::Result<()> {
         markout_horizons_ns: vec![],
     };
     let venue_otr = simulator::OtrConfig { window: std::time::Duration::from_secs(1), max_messages_per_window: 10_000, max_otr_ratio: 1_000_000.0 };
-    let mut engine = execution::ExecutionEngine::new(run_config, vec![], Box::new(execution::AlwaysAllowRms), execution::CostConfig::default(), venue_otr, vec![], false);
+    // `SimExchange` built here now, not inside `ExecutionEngine::new`
+    // (dual-clock replay, 2026-08-27) -- see main.rs's own construction
+    // for why. Just as throwaway as `engine` itself for this harness.
+    let mut venue = simulator::SimExchange::new(&[], venue_otr);
+    let mut engine = execution::ExecutionEngine::new(run_config, vec![], Box::new(execution::AlwaysAllowRms), execution::CostConfig::default(), vec![], false);
 
     let wakes_crude = Rc::new(Cell::new(0u64));
     let wakes_gas = Rc::new(Cell::new(0u64));
@@ -358,7 +375,7 @@ fn main() -> io::Result<()> {
     for (label, path) in cases {
         println!("--- {label} ---");
         let file_start = Instant::now();
-        let counters = stream_file(label, path, &mut cache, &mut dispatcher, &mut engine, stop_after)?;
+        let counters = stream_file(label, path, &mut cache, &mut dispatcher, &mut engine, &mut venue, stop_after)?;
         let elapsed = file_start.elapsed();
         println!(
             "  {} outer records, {} messages in {:.2}s -> {:.0} records/s, {:.0} messages/s",

@@ -32,10 +32,12 @@ mod decoder;
 mod simulator;
 #[path = "execution.rs"]
 mod execution;
+#[path = "../logging/logging.rs"]
+mod logging;
 
 use decoder::{DecodedMessage, OrderAdd, Price as DPrice, Qty as DQty, Side as DSide, Trade};
-use execution::{AlwaysAllowRms, CostConfig, CostModel, ExecutionEngine, GateOutcome, LocalOtrConfig, NewOrderIntent, OrderState, OtrConfigSummary, RunConfig};
-use simulator::{OrderType, OtrConfig, RejectReason};
+use execution::{AlwaysAllowRms, CostConfig, CostModel, ExecOutcome, ExecutionEngine, GateOutcome, LocalOtrConfig, NewOrderIntent, OrderState, OtrConfigSummary, RunConfig};
+use simulator::{OrderType, OtrConfig, RejectReason, SimExchange};
 use std::process::ExitCode;
 use std::time::Duration;
 use types::{Currency, Date, Instrument, InstrumentId, InstrumentKind, Lots, Price, Settlement, Side, Venue, YearMonth};
@@ -57,7 +59,11 @@ fn future_instrument(id: u32, tick_size: i64, freeze_qty: i64) -> Instrument {
     }
 }
 
-fn engine(session_id: u32, instrument: Instrument) -> ExecutionEngine {
+/// Returns `(ExecutionEngine, SimExchange)` now -- `SimExchange` moved
+/// out to `main.rs`'s own ownership in the real code (dual-clock replay,
+/// 2026-08-27).
+fn engine(session_id: u32, instrument: Instrument) -> (ExecutionEngine, SimExchange) {
+    let ids = vec![instrument.id];
     let run_config = RunConfig {
         session_id,
         cost_config: CostConfig::default(),
@@ -66,7 +72,34 @@ fn engine(session_id: u32, instrument: Instrument) -> ExecutionEngine {
         markout_horizons_ns: vec![1_000_000, 5_000_000],
     };
     let venue_otr = OtrConfig { window: Duration::from_secs(1), max_messages_per_window: 10_000, max_otr_ratio: 1_000_000.0 };
-    ExecutionEngine::new(run_config, vec![instrument], Box::new(AlwaysAllowRms), CostConfig::default(), venue_otr, vec![1_000_000, 5_000_000], true)
+    let venue = SimExchange::new(&ids, venue_otr);
+    let eng = ExecutionEngine::new(run_config, vec![instrument], Box::new(AlwaysAllowRms), CostConfig::default(), vec![1_000_000, 5_000_000], true);
+    (eng, venue)
+}
+
+/// Test-only convenience, same reasoning as `execution.rs`'s own
+/// `submit_order_sync`: recombines `submit_order_local` + (if gates
+/// passed) `deliver_order` into the one synchronous call this harness's
+/// scenarios were written against -- they're proving gate/state-machine/
+/// accounting logic, not the Scheduler-driven timing split (`main.rs`'s
+/// own concern).
+fn submit_order_sync(eng: &mut ExecutionEngine, venue: &mut SimExchange, intent: NewOrderIntent, now_ns: u64) -> (GateOutcome, ExecOutcome) {
+    let (outcome, req, mut merged) = eng.submit_order_local(intent, now_ns, venue);
+    if let Some(req) = req {
+        let delivered = eng.deliver_order(req, now_ns, venue);
+        merged.fills.extend(delivered.fills);
+        merged.order_events.extend(delivered.order_events);
+    }
+    (outcome, merged)
+}
+
+/// Test-only convenience, same reasoning: recombines
+/// `prepare_for_market_event` + `venue.apply_market_event` +
+/// `apply_venue_reports` into one synchronous call.
+fn on_market_event_sync(eng: &mut ExecutionEngine, venue: &mut SimExchange, event: &DecodedMessage, now_ns: u64) -> ExecOutcome {
+    eng.prepare_for_market_event(venue);
+    let reports = venue.apply_market_event(event, now_ns);
+    eng.apply_venue_reports(reports, now_ns)
 }
 
 fn add(side: DSide, price: i64, qty: i64, prio: u64) -> DecodedMessage {
@@ -82,9 +115,9 @@ fn main() -> ExitCode {
 
     println!("=== T07 execution -- acceptance scenario 1: PendingCancel -> Filled race ===");
     {
-        let mut eng = engine(7, future_instrument(1, 1, 1000));
+        let (mut eng, mut venue) = engine(7, future_instrument(1, 1, 1000));
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(150)), qty: Lots(10) };
-        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!("expected Submitted") };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!("expected Submitted") };
         println!("  order {client_order_id} submitted, state={:?}", eng.order(client_order_id).unwrap().state);
 
         assert!(eng.request_cancel(client_order_id, 100).0);
@@ -94,7 +127,7 @@ fn main() -> ExitCode {
         // Real trade quantity is in wire-raw units (simulator's native
         // scale) -- `intent.qty.to_raw_qty()` (10 lots) so this real
         // trade genuinely fully consumes the resting order.
-        eng.on_market_event(&trade(DSide::Sell, 150, intent.qty.to_raw_qty().0, true, 999_999), 150);
+        on_market_event_sync(&mut eng, &mut venue, &trade(DSide::Sell, 150, intent.qty.to_raw_qty().0, true, 999_999), 150);
         let state_after_fill = eng.order(client_order_id).unwrap().state;
         println!("  real trade arrives before our cancel does -- state={state_after_fill:?}, filled_qty={}", eng.order(client_order_id).unwrap().filled_qty.0);
         if state_after_fill != OrderState::Filled {
@@ -102,7 +135,7 @@ fn main() -> ExitCode {
             failures += 1;
         }
 
-        eng.deliver_cancel_to_venue(client_order_id, 200);
+        eng.deliver_cancel_to_venue(client_order_id, 200, &mut venue);
         let final_state = eng.order(client_order_id).unwrap().state;
         println!("  moot cancel now delivered late -- state stays {final_state:?}, fills recorded={}", eng.fills().len());
         if final_state != OrderState::Filled || eng.fills().len() != 1 {
@@ -115,25 +148,25 @@ fn main() -> ExitCode {
 
     println!("\n=== T07 execution -- acceptance scenario 2: Denied never reaches the venue ===");
     {
-        let mut eng = engine(7, future_instrument(1, 10, 100));
+        let (mut eng, mut venue) = engine(7, future_instrument(1, 10, 100));
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(105)), qty: Lots(5) };
-        let (outcome, _) = eng.submit_order(intent, 0);
+        let (outcome, _) = submit_order_sync(&mut eng, &mut venue, intent, 0);
         println!("  tick-size violation (price=105, tick_size=10): outcome={outcome:?}, venue_submit_calls={}", eng.venue_submit_calls());
         let ok_tick = matches!(outcome, GateOutcome::Denied { .. }) && eng.venue_submit_calls() == 0;
 
-        let mut eng2 = engine(7, future_instrument(1, 10, 50));
+        let (mut eng2, mut venue2) = engine(7, future_instrument(1, 10, 50));
         let intent2 = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(51) };
-        let (outcome2, _) = eng2.submit_order(intent2, 0);
+        let (outcome2, _) = submit_order_sync(&mut eng2, &mut venue2, intent2, 0);
         println!("  freeze-qty violation (qty=51, freeze_qty=50): outcome={outcome2:?}, venue_submit_calls={}", eng2.venue_submit_calls());
         let ok_freeze = matches!(outcome2, GateOutcome::Denied { .. }) && eng2.venue_submit_calls() == 0;
 
         // Contrast: a BOC that would cross passes every local gate and
         // genuinely reaches the venue, which itself refuses it --
         // Rejected, a different terminal state from Denied.
-        let mut eng3 = engine(7, future_instrument(1, 1, 1000));
-        eng3.on_market_event(&add(DSide::Sell, 150, 10, 1), 0);
+        let (mut eng3, mut venue3) = engine(7, future_instrument(1, 1, 1000));
+        on_market_event_sync(&mut eng3, &mut venue3, &add(DSide::Sell, 150, 10, 1), 0);
         let intent3 = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::BookOrCancel(Price(150)), qty: Lots(5) };
-        let (outcome3, _) = eng3.submit_order(intent3, 0);
+        let (outcome3, _) = submit_order_sync(&mut eng3, &mut venue3, intent3, 0);
         let GateOutcome::Submitted { client_order_id: c3 } = outcome3 else { panic!("BOC should reach the venue") };
         let order3 = eng3.order(c3).unwrap();
         println!(
@@ -175,15 +208,15 @@ fn main() -> ExitCode {
         }
 
         // Same function, pre-trade and post-fill -- can't disagree.
-        let mut eng = engine(7, instrument.clone());
+        let (mut eng, mut venue) = engine(7, instrument.clone());
         let pre_trade_cost = eng.cost_model().round_trip(&instrument, qty, price, Side::Sell);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(price), qty };
-        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!() };
         // Real trade quantity in wire-raw units, matching `qty` (Lots)
         // converted via `to_raw_qty()` so this trade genuinely fully
         // fills the resting order -- not the pre-fix bug where a lot
         // count was handed to the venue as if it were already raw.
-        eng.on_market_event(&trade(DSide::Sell, price.0, qty.to_raw_qty().0, true, 999_999), 10);
+        on_market_event_sync(&mut eng, &mut venue, &trade(DSide::Sell, price.0, qty.to_raw_qty().0, true, 999_999), 10);
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Filled);
         let realised = &eng.fills()[0];
         println!("  pre-trade query: Rs {:.4}   realised fill's cost: Rs {:.4}", pre_trade_cost.total_rupees, realised.cost.total_rupees);
@@ -197,8 +230,8 @@ fn main() -> ExitCode {
 
     println!("\n=== T07 execution -- acceptance scenario 4: Tier 1 report with run identity ===");
     {
-        let eng = engine(7, future_instrument(1, 1, 1000));
-        let report = eng.tier1_report();
+        let (eng, venue) = engine(7, future_instrument(1, 1, 1000));
+        let report = eng.tier1_report(&venue);
         let printed = format!("{report}");
         println!("{printed}");
         let ok = printed.contains("run identity") && printed.contains(execution::BUILD_HASH) && printed.contains(&format!("{:#018x}", report.run_identity.config_hash));
@@ -212,18 +245,18 @@ fn main() -> ExitCode {
 
     println!("\n=== T07 execution -- acceptance scenario 5: queue position at fill is genuine, not fabricated ===");
     {
-        let mut eng = engine(7, future_instrument(1, 1, 1000));
-        eng.on_market_event(&add(DSide::Sell, 150, 10, 1), 0);
+        let (mut eng, mut venue) = engine(7, future_instrument(1, 1, 1000));
+        on_market_event_sync(&mut eng, &mut venue, &add(DSide::Sell, 150, 10, 1), 0);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(150)), qty: Lots(5) };
-        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!() };
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Accepted);
 
         // First real trade consumes the 10 (raw) resting ahead of us --
         // does not fill us yet.
-        eng.on_market_event(&trade(DSide::Sell, 150, 10, true, 1), 5);
+        on_market_event_sync(&mut eng, &mut venue, &trade(DSide::Sell, 150, 10, true, 1), 5);
         // Second, separate real trade actually fills us -- wire-raw qty
         // equal to our own order's requested raw quantity (5 lots).
-        eng.on_market_event(&trade(DSide::Sell, 150, intent.qty.to_raw_qty().0, true, 999_999), 6);
+        on_market_event_sync(&mut eng, &mut venue, &trade(DSide::Sell, 150, intent.qty.to_raw_qty().0, true, 999_999), 6);
 
         let fill = &eng.fills()[0];
         println!("  queue_position_at_fill = {:?} (expected Some(10) -- the position established when the order joined the queue, not the 0 left by the time our own fill's event ran)", fill.queue_position_at_fill);

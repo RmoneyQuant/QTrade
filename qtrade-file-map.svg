@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 1920 1460" width="1920" height="1460" role="img"
+     aria-label="QTrade block-to-file map, 2026-08-27 dual-clock build. Each architectural block is labeled with the real source file that implements it: feed_replay/feed_replay.rs decodes both timestamps; scheduler/scheduler.rs holds the one real priority queue; main.rs owns dispatch_event, the only place that pattern-matches a popped event; simulator/simulator.rs and cache/cache.rs remain mutually independent, each reachable only through a borrowed reference main.rs passes in per call; execution/execution.rs holds the gate-then-deliver split; event_dispatcher/event_dispatcher.rs and control_dispatcher/control_dispatcher.rs both reach the strategy through the same registered Rc RefCell dyn Strategy handler; strategy/naturalgas_bracket/naturalgas_bracket.rs and strategy/strategy.rs hold the actual trading logic and its shared Ctx/RunHandles infrastructure. Of roughly sixteen real call edges in this architecture, only two are dispatched through a registry lookup -- EventDispatcher and ControlDispatcher reaching the strategy -- every other edge, including the entire dual-clock and latency mechanism, is direct wiring main.rs controls explicitly.">
+
+  <defs>
+    <marker id="ah-direct" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#aab2c8"/></marker>
+    <marker id="ah-dispatched" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e8c547"/></marker>
+    <marker id="ah-grey-rev" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#8792ad"/></marker>
+    <marker id="ah-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8792ad"/></marker>
+    <marker id="dispatch-dot" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7"><path d="M5,0 L10,5 L5,10 L0,5 z" fill="#e8c547"/></marker>
+  </defs>
+
+  <style>
+    text { font-family: "Segoe UI", Helvetica, Arial, sans-serif; fill: #e7ebf7; }
+    .mono { font-family: Consolas, "SF Mono", Menlo, monospace; }
+    .bg { fill: #0f1320; }
+    .title { font-size: 25px; font-weight: 700; fill: #f2f4fb; }
+    .subtitle { font-size: 13px; fill: #8992ac; }
+    .boundary { fill: none; stroke: #384062; stroke-width: 1.5; stroke-dasharray: 8 6; }
+    .boundary-lbl { font-size: 12.5px; fill: #6e7791; }
+    .box-title { font-weight: 700; font-size: 14.5px; fill: #f2f4fb; }
+    .box-path { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 13px; font-weight: 700; }
+    .box-sub { font-size: 11px; fill: #aab2c8; }
+    .box-mono { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 10.3px; fill: #aab2c8; }
+    .edge-lbl { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 10.5px; }
+    .edge-lbl-bg { fill: #0f1320; opacity: 0.86; }
+    .amber-t { fill: #e3a83b; } .cyan-t { fill: #46c2d9; } .violet-t { fill: #b18cf0; } .magenta-t { fill: #e2608f; } .red-t { fill: #e2584f; } .grey-t { fill: #8792ad; } .gold-t { fill: #e8c547; }
+    .box-neutral { fill: #171d2e; stroke: #4a5478; stroke-width: 1.6; }
+    .box-amber { fill: #2a2213; stroke: #e3a83b; stroke-width: 1.8; }
+    .box-cyan { fill: #122a30; stroke: #46c2d9; stroke-width: 1.8; }
+    .box-violet { fill: #211a30; stroke: #b18cf0; stroke-width: 2; }
+    .box-red { fill: #2c1615; stroke: #e2584f; stroke-width: 1.3; }
+    .chip { fill: #0f1320; stroke: #384062; stroke-width: 1.2; }
+    .edge-direct { stroke: #aab2c8; fill: none; stroke-width: 1.7; }
+    .edge-dispatched { stroke: #e8c547; fill: none; stroke-width: 2.4; stroke-dasharray: 9 5; }
+  </style>
+
+  <rect class="bg" x="0" y="0" width="1920" height="1460"/>
+
+  <text class="title" x="960" y="44" text-anchor="middle">QTrade — Block ↔ File Map</text>
+  <text class="subtitle" x="960" y="70" text-anchor="middle">Same architecture, labeled by the real source file behind each block. Of ~16 call edges here, only 2 are dispatched through a registry — everything else is direct wiring main.rs controls explicitly (D07).</text>
+
+  <rect class="boundary" x="40" y="95" width="1840" height="1330" rx="16"/>
+  <text class="boundary-lbl mono" x="64" y="124">main.rs — crate root, the one file not in its own folder. Constructs every component below; owns the single real Scheduler + pending_ops/pending_reports.</text>
+
+  <!-- Row A -->
+  <rect class="box-neutral" x="90" y="150" width="280" height="110" rx="8"/>
+  <text class="box-path" x="230" y="178" text-anchor="middle">feed_replay/feed_replay.rs</text>
+  <text class="box-sub" x="230" y="198" text-anchor="middle">fn replay(...) — streams + decodes</text>
+  <text class="box-mono" x="230" y="216" text-anchor="middle">every outer record, no scheduling here</text>
+  <text class="box-mono" x="230" y="234" text-anchor="middle">own harness: feed-replay-validate</text>
+
+  <rect class="box-neutral" x="760" y="150" width="400" height="110" rx="8"/>
+  <text class="box-path" x="960" y="178" text-anchor="middle">feed_replay.rs — RecordSource::next_record</text>
+  <text class="box-mono" x="960" y="200" text-anchor="middle">decodes hdr[8..16] → recorder_ts (i64, real)</text>
+  <text class="box-mono" x="960" y="218" text-anchor="middle">PacketHeader.TransactTime → exchange_ts (u64)</text>
+  <text class="box-sub" x="960" y="238" text-anchor="middle">returns io::Result&lt;Option&lt;i64&gt;&gt; — None at EOF</text>
+
+  <rect class="box-red" x="1420" y="150" width="410" height="110" rx="8"/>
+  <text class="box-title red-t" x="1625" y="174" text-anchor="middle">main.rs — inline in the replay callback</text>
+  <text class="box-sub" x="1625" y="194" text-anchor="middle">Q1 outlier check (D20): std::process::exit(1)</text>
+  <text class="box-sub" x="1625" y="210" text-anchor="middle">on a negative or oversized delta — never clamped</text>
+  <text class="box-mono" x="1625" y="230" text-anchor="middle">config/config.rs — [run] latency_ns,</text>
+  <text class="box-mono" x="1625" y="246" text-anchor="middle">max_feed_delta_ns (both optional, defaulted)</text>
+
+  <line x1="370" y1="205" x2="760" y2="205" class="edge-direct" marker-end="url(#ah-direct)"/>
+  <line x1="1160" y1="205" x2="1420" y2="205" class="edge-direct" marker-end="url(#ah-direct)"/>
+
+  <!-- Row B: Scheduler -->
+  <rect class="box-neutral" x="740" y="300" width="440" height="240" rx="10" stroke="#4a5478"/>
+  <text class="box-path" x="960" y="326" text-anchor="middle">scheduler/scheduler.rs</text>
+  <text class="box-mono" x="960" y="344" text-anchor="middle">Scheduler, SimClock, Target, EventPayload, peek_earliest_timestamp()</text>
+  <rect class="chip" x="770" y="356" width="380" height="32" rx="5"/>
+  <text class="box-mono amber-t" x="960" y="377" text-anchor="middle">MarketData{target: SimExchange} @ exchange_ts</text>
+  <rect class="chip" x="770" y="398" width="380" height="32" rx="5"/>
+  <text class="box-mono cyan-t" x="960" y="419" text-anchor="middle">MarketData{target: Cache} @ recorder_ts</text>
+  <rect class="chip" x="770" y="440" width="380" height="32" rx="5"/>
+  <text class="box-mono magenta-t" x="960" y="461" text-anchor="middle">OrderArrival{op_id} / ReportDelivery{op_id}</text>
+  <rect class="chip" x="770" y="482" width="380" height="32" rx="5"/>
+  <text class="box-mono" x="960" y="503" text-anchor="middle">one new dependency: use crate::decoder::DecodedMessage</text>
+
+  <line x1="850" y1="260" x2="850" y2="300" class="edge-direct" marker-end="url(#ah-direct)"/>
+  <line x1="1070" y1="260" x2="1070" y2="300" class="edge-direct" marker-end="url(#ah-direct)"/>
+  <line x1="960" y1="540" x2="960" y2="560" class="edge-direct" marker-end="url(#ah-direct)"/>
+
+  <!-- dispatch_event tag -->
+  <rect class="box-neutral" x="740" y="560" width="440" height="50" rx="8"/>
+  <text class="box-path" x="960" y="580" text-anchor="middle">main.rs :: dispatch_event(event, ...)</text>
+  <text class="box-sub" x="960" y="596" text-anchor="middle">not a Scheduler method — keeps scheduler.rs free of cache/execution/simulator</text>
+
+  <!-- Row C: SimExchange / Cache -->
+  <rect class="box-amber" x="90" y="660" width="380" height="130" rx="8"/>
+  <text class="box-path amber-t" x="280" y="686" text-anchor="middle">simulator/simulator.rs</text>
+  <text class="box-sub" x="280" y="706" text-anchor="middle">SimExchange — own book + matching engine</text>
+  <text class="box-mono" x="280" y="724" text-anchor="middle">zero dependency on cache.rs, by construction (D10)</text>
+  <rect class="box-red" x="110" y="750" width="340" height="26" rx="5"/>
+  <text class="box-mono red-t" x="280" y="767" text-anchor="middle">own harness: simulator-validate</text>
+
+  <rect class="box-cyan" x="1450" y="660" width="380" height="130" rx="8"/>
+  <text class="box-path cyan-t" x="1640" y="686" text-anchor="middle">cache/cache.rs</text>
+  <text class="box-sub" x="1640" y="706" text-anchor="middle">Cache — subscribable order book, per-instrument</text>
+  <text class="box-mono" x="1640" y="724" text-anchor="middle">zero dependency on simulator.rs, by construction (D10)</text>
+  <rect class="box-red" x="1470" y="750" width="340" height="26" rx="5"/>
+  <text class="box-mono red-t" x="1640" y="767" text-anchor="middle">own harness: cache-validate</text>
+
+  <!-- Row D: ExecutionEngine / EventDispatcher -->
+  <rect class="box-amber" x="90" y="840" width="380" height="210" rx="8"/>
+  <text class="box-path amber-t" x="280" y="866" text-anchor="middle">execution/execution.rs</text>
+  <text class="box-mono" x="280" y="888" text-anchor="middle">submit_order_local(intent, venue: &amp;SimExchange)</text>
+  <text class="box-mono" x="280" y="906" text-anchor="middle">deliver_order(req, venue: &amp;mut SimExchange)</text>
+  <text class="box-mono" x="280" y="924" text-anchor="middle">apply_venue_reports / prepare_for_market_event(venue)</text>
+  <text class="box-mono" x="280" y="942" text-anchor="middle">deliver_cancel_to_venue / deliver_modify_to_venue(venue)</text>
+  <rect class="box-red" x="110" y="1000" width="340" height="28" rx="5"/>
+  <text class="box-mono red-t" x="280" y="1019" text-anchor="middle">own harness: execution-validate</text>
+
+  <rect class="box-cyan" x="1450" y="840" width="380" height="130" rx="8"/>
+  <text class="box-path cyan-t" x="1640" y="866" text-anchor="middle">event_dispatcher/event_dispatcher.rs</text>
+  <text class="box-sub" x="1640" y="888" text-anchor="middle">on_book_touched / on_trade</text>
+  <text class="box-mono gold-t" x="1640" y="906" text-anchor="middle">holds the registry: Rc&lt;RefCell&lt;dyn Strategy&gt;&gt;</text>
+
+  <!-- Row E: Strategy / ControlDispatcher -->
+  <rect class="box-violet" x="620" y="1100" width="680" height="220" rx="10"/>
+  <text class="box-path violet-t" x="960" y="1128" text-anchor="middle">strategy/naturalgas_bracket/naturalgas_bracket.rs</text>
+  <text class="box-sub" x="960" y="1150" text-anchor="middle">impl Strategy — on_start / on_book / on_trade / on_fill / on_order_update</text>
+  <text class="box-mono" x="960" y="1176" text-anchor="middle">strategy/strategy.rs (shared infra, not a strategy of its own):</text>
+  <text class="box-mono" x="960" y="1194" text-anchor="middle">Ctx, StartCtx, RunHandles&lt;'a&gt;, PendingVenueOp, DEFAULT_STRATEGY_ID</text>
+  <text class="box-mono" x="960" y="1220" text-anchor="middle">also present, not compiled in today:</text>
+  <text class="box-mono" x="960" y="1238" text-anchor="middle">strategy/limit_order_book_generator/limit_order_book_generator.rs</text>
+
+  <rect class="box-violet" x="1450" y="1100" width="380" height="140" rx="8"/>
+  <text class="box-path violet-t" x="1640" y="1128" text-anchor="middle">control_dispatcher/control_dispatcher.rs</text>
+  <text class="box-sub" x="1640" y="1150" text-anchor="middle">dispatch(...)</text>
+  <text class="box-mono gold-t" x="1640" y="1168" text-anchor="middle">same registered Rc&lt;RefCell&lt;dyn Strategy&gt;&gt; handler</text>
+  <text class="box-mono" x="1640" y="1186" text-anchor="middle">EventDispatcher holds — one strategy, one destination</text>
+
+  <!-- Edges: E,F,G,H (all DIRECT) -->
+  <path d="M800,610 L800,625 L720,625 L680,625 L540,625 L500,625 L280,625 L280,660" class="edge-direct" marker-end="url(#ah-direct)"/>
+  <path d="M1140,610 L1140,625 L1640,625 L1640,660" class="edge-direct" marker-end="url(#ah-direct)"/>
+  <path d="M900,610 L900,800 L720,800 L680,800 L540,800 L500,800 L120,800 L120,840" class="edge-direct" marker-end="url(#ah-direct)"/>
+  <path d="M1080,610 L1080,800 L1900,800 L1900,1170 L1830,1170" class="edge-direct" marker-end="url(#ah-direct)"/>
+  <rect class="edge-lbl-bg" x="560" y="608" width="130" height="16"/>
+  <text class="edge-lbl grey-t" x="625" y="620" text-anchor="middle">apply_market_event</text>
+  <rect class="edge-lbl-bg" x="1300" y="608" width="90" height="16"/>
+  <text class="edge-lbl grey-t" x="1345" y="620" text-anchor="middle">cache.apply</text>
+  <rect class="edge-lbl-bg" x="150" y="783" width="150" height="16"/>
+  <text class="edge-lbl grey-t" x="225" y="795" text-anchor="middle">deliver_order(...)</text>
+  <rect class="edge-lbl-bg" x="1400" y="783" width="150" height="16"/>
+  <text class="edge-lbl grey-t" x="1475" y="795" text-anchor="middle">control_dispatcher.dispatch</text>
+
+  <!-- I SimExchange<->ExecutionEngine (DIRECT, borrowed) -->
+  <line x1="280" y1="790" x2="280" y2="840" class="edge-direct" marker-start="url(#ah-grey-rev)" marker-end="url(#ah-direct)"/>
+  <rect class="edge-lbl-bg" x="292" y="797" width="290" height="16"/>
+  <text class="edge-lbl grey-t" x="298" y="809">&amp;SimExchange / &amp;mut SimExchange, borrowed per call</text>
+
+  <!-- J Cache->EventDispatcher (DIRECT) -->
+  <line x1="1640" y1="790" x2="1640" y2="840" class="edge-direct" marker-end="url(#ah-direct)"/>
+  <text class="edge-lbl grey-t" x="1656" y="820">&amp;Cache, read-only</text>
+
+  <!-- K EventDispatcher->Strategy: DISPATCHED -->
+  <path d="M1640,970 L1640,1030 L1250,1030 L1250,1100" class="edge-dispatched" marker-start="url(#dispatch-dot)" marker-end="url(#ah-dispatched)"/>
+  <rect class="edge-lbl-bg" x="1290" y="1013" width="230" height="16"/>
+  <text class="edge-lbl gold-t" x="1405" y="1025" text-anchor="middle">DISPATCHED: registry lookup</text>
+
+  <!-- L Strategy->ExecutionEngine (DIRECT) -->
+  <path d="M620,1160 L350,1160 L350,1050" class="edge-direct" marker-end="url(#ah-direct)"/>
+  <rect class="edge-lbl-bg" x="360" y="1145" width="230" height="16"/>
+  <text class="edge-lbl grey-t" x="475" y="1157" text-anchor="middle">&amp;mut ExecutionEngine, held by Ctx</text>
+
+  <!-- N Strategy->Scheduler (DIRECT) -->
+  <path d="M700,1100 L700,470 L740,470" class="edge-direct" marker-end="url(#ah-direct)"/>
+  <rect class="edge-lbl-bg" x="710" y="650" width="210" height="16"/>
+  <text class="edge-lbl grey-t" x="815" y="662" text-anchor="middle">&amp;mut Scheduler, held by RunHandles</text>
+
+  <!-- O ExecutionEngine->Scheduler (DIRECT) -->
+  <path d="M470,950 L520,950 L520,430 L740,430" class="edge-direct" marker-end="url(#ah-direct)"/>
+  <rect class="edge-lbl-bg" x="130" y="650" width="260" height="16"/>
+  <text class="edge-lbl grey-t" x="260" y="662" text-anchor="middle">schedule_report_if_needed (main.rs)</text>
+
+  <!-- P ControlDispatcher->Strategy: DISPATCHED -->
+  <line x1="1450" y1="1170" x2="1300" y2="1170" class="edge-dispatched" marker-start="url(#dispatch-dot)" marker-end="url(#ah-dispatched)"/>
+  <rect class="edge-lbl-bg" x="1290" y="1146" width="230" height="16"/>
+  <text class="edge-lbl gold-t" x="1405" y="1158" text-anchor="middle">DISPATCHED: registry lookup</text>
+
+  <!-- Legend -->
+  <g font-size="11.5">
+    <line x1="90" y1="1372" x2="150" y2="1372" class="edge-direct" marker-end="url(#ah-direct)"/>
+    <text class="mono" x="164" y="1377" fill="#aab2c8">DIRECT — concrete method call / borrowed reference (D07 wiring)</text>
+    <line x1="900" y1="1372" x2="960" y2="1372" class="edge-dispatched" marker-start="url(#dispatch-dot)" marker-end="url(#ah-dispatched)"/>
+    <text class="mono" x="974" y="1377" fill="#e8c547">DISPATCHED — through the one registered Rc&lt;RefCell&lt;dyn Strategy&gt;&gt; handler</text>
+  </g>
+  <text class="subtitle" x="960" y="1435" text-anchor="middle">Every own-harness *-validate binary above still builds and runs independently — no *-validate target was removed by this pass.</text>
+</svg>

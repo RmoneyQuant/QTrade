@@ -40,6 +40,49 @@ pub struct RunSection {
     /// How many `feed.csv` lines also echo to stdout while a run is in
     /// progress. The complete feed always goes to the file regardless.
     pub max_feed_stdout_lines: usize,
+    /// How long one of our own order/cancel/modify messages takes to
+    /// physically reach the venue's matching engine --
+    /// `simulator::SimExchange::with_order_latency`'s own config input
+    /// (2026-08-27: relocated from a `main.rs`-level scheduled delay into
+    /// the venue itself, since "send as fast as possible, the delay
+    /// belongs to the venue" is what a live OMS actually does -- see
+    /// `strategy.rs`'s own header). `0` is a legitimate value (instant-
+    /// match behaviour, as a special case, and every existing test's own
+    /// default). Split from one combined round-trip number into its two
+    /// real legs the same day, on review: matching must happen the
+    /// instant the order genuinely arrives, not after the full round
+    /// trip. Real measured MCX round trip as of 2026-08-27 is ~500,000ns;
+    /// with no measured asymmetry yet, this run splits it evenly.
+    pub order_outbound_latency_ns: u64,
+    /// How long the matching engine's own answer takes to travel back to
+    /// us, *after* a message has already been matched -- see
+    /// `order_outbound_latency_ns`'s own doc comment for the full
+    /// account. `simulator::Fixed`'s flat model (FR-B20) is what this
+    /// pair wires in; `simulator::Sampled` (already built, same
+    /// `outbound()`/`inbound()` trait shape) is the later, probabilistic
+    /// upgrade this seam is for.
+    pub order_inbound_latency_ns: u64,
+    /// Outlier ceiling on `recorder_capture_ts - exchange_transact_time`
+    /// (the real, per-packet feed-latency delta) -- a delta past this, or
+    /// negative, is a hard run failure (D20 fail-fast), never clamped.
+    /// Default derived from a real check against `19_08_2026` (max
+    /// observed: ~59.4ms across 500k packets), with headroom for a
+    /// slower day.
+    pub max_feed_delta_ns: u64,
+    /// `"normal"` (default) or `"debug"` -- selects `logging::LogLevel`
+    /// for the run's own `events.log` (2026-08-27, component-level event
+    /// logging pass). Normal carries every order-lifecycle confirmation
+    /// (subscription, gate check, venue response, dispatch to the
+    /// strategy) that a real run actually needs to audit. Debug is real,
+    /// tested infrastructure (`Logger::debug`) with no caller yet as of
+    /// this pass -- the second architectural reversal the same day
+    /// (order latency moving into `SimExchange` itself) removed the one
+    /// thing that used to be debug-only (tracing an `OrderArrival`/
+    /// `ReportDelivery` being *scheduled*); disclosed honestly rather
+    /// than left implying detail that isn't there yet. Anything other
+    /// than these two values fails
+    /// cleanly, same spirit as `mode`.
+    pub log_level: String,
 }
 
 /// Connectivity/credential detail -- deliberately empty today. No live
@@ -135,9 +178,30 @@ fn parse(text: &str, path: &Path) -> Result<Config, ConfigError> {
         Some(raw) => parse_int(raw, "max_feed_stdout_lines")? as usize,
         None => 200,
     };
+    let order_outbound_latency_ns = match run_raw.get("order_outbound_latency_ns") {
+        Some(raw) => parse_int(raw, "order_outbound_latency_ns")?,
+        None => 0,
+    };
+    let order_inbound_latency_ns = match run_raw.get("order_inbound_latency_ns") {
+        Some(raw) => parse_int(raw, "order_inbound_latency_ns")?,
+        None => 0,
+    };
+    let max_feed_delta_ns = match run_raw.get("max_feed_delta_ns") {
+        Some(raw) => parse_int(raw, "max_feed_delta_ns")?,
+        None => 250_000_000,
+    };
+    let log_level = match run_raw.get("log_level") {
+        Some(raw) => {
+            if raw != "normal" && raw != "debug" {
+                return Err(ConfigError(format!("{}: [run].log_level = {raw:?} -- must be \"normal\" or \"debug\"", path.display())));
+            }
+            raw.clone()
+        }
+        None => "normal".to_string(),
+    };
 
     Ok(Config {
-        run: RunSection { mode, session_id, recording_path, report_dir, max_outer_records, max_feed_stdout_lines },
+        run: RunSection { mode, session_id, recording_path, report_dir, max_outer_records, max_feed_stdout_lines, order_outbound_latency_ns, order_inbound_latency_ns, max_feed_delta_ns, log_level },
         deployment: DeploymentSection::default(),
     })
 }
@@ -183,6 +247,10 @@ mod tests {
         assert_eq!(cfg.run.report_dir, "logs/qtrade");
         assert_eq!(cfg.run.max_outer_records, 0, "optional key defaults to 0 (no limit)");
         assert_eq!(cfg.run.max_feed_stdout_lines, 200, "optional key defaults to 200");
+        assert_eq!(cfg.run.order_outbound_latency_ns, 0, "optional key defaults to 0 (today's instant-match behaviour)");
+        assert_eq!(cfg.run.order_inbound_latency_ns, 0, "optional key defaults to 0 (today's instant-match behaviour)");
+        assert_eq!(cfg.run.max_feed_delta_ns, 250_000_000, "optional key defaults to 250ms");
+        assert_eq!(cfg.run.log_level, "normal", "optional key defaults to normal");
     }
 
     #[test]
@@ -195,10 +263,25 @@ mod tests {
             report_dir = "logs"
             max_outer_records = 2000000
             max_feed_stdout_lines = 20
+            order_outbound_latency_ns = 250000
+            order_inbound_latency_ns = 250000
+            max_feed_delta_ns = 100000000
+            log_level = "debug"
         "#;
         let cfg = parse(text, &dummy_path()).unwrap();
         assert_eq!(cfg.run.max_outer_records, 2_000_000);
         assert_eq!(cfg.run.max_feed_stdout_lines, 20);
+        assert_eq!(cfg.run.order_outbound_latency_ns, 250_000);
+        assert_eq!(cfg.run.order_inbound_latency_ns, 250_000);
+        assert_eq!(cfg.run.max_feed_delta_ns, 100_000_000);
+        assert_eq!(cfg.run.log_level, "debug");
+    }
+
+    #[test]
+    fn invalid_log_level_is_a_hard_error() {
+        let text = "[run]\nmode = \"backtest\"\nsession_id = 1\nrecording_path = \"x.bin\"\nreport_dir = \"logs\"\nlog_level = \"verbose\"\n";
+        let err = parse(text, &dummy_path()).unwrap_err();
+        assert!(err.to_string().contains("must be \"normal\" or \"debug\""), "{err}");
     }
 
     #[test]

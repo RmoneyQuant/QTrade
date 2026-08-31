@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 1920 1500" width="1920" height="1500" role="img"
+     aria-label="QTrade order lifecycle and timing, 2026-08-27 dual-clock build, in two parts. Part 1 is a sequence diagram of one order's real timing: at t=T the strategy's ctx.submit calls ExecutionEngine's submit_order_local synchronously against a read-only SimExchange reference, which either denies the order immediately (terminal, venue never touched) or schedules an OrderArrival event latency_ns later; at t=T+latency_ns that event fires, ExecutionEngine's deliver_order reaches a mutably-borrowed SimExchange, which either rejects the order (terminal) or rests/fills it, and the resulting outcome is scheduled as a ReportDelivery event another latency_ns later; only at t=T+2*latency_ns does ControlDispatcher's dispatch call finally reach the strategy's on_fill or on_order_update -- the strategy never learns the real outcome earlier than this. Part 2 is the eleven-state order machine verified against execution.rs and simulator.rs: Initialized reaches Denied on a local gate rejection or Submitted when gates pass; Submitted resolves to Rejected or Accepted; Accepted and PartiallyFilled can enter PendingUpdate, which enters PendingCancel directly; PendingCancel resolves to Canceled or, in a real race the code explicitly guards and always resolves in the fill's favor, to Filled if a trade fills the order before the cancel is delivered.">
+
+  <defs>
+    <marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#aab2c8"/></marker>
+    <marker id="ah-ink-dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7d87a3"/></marker>
+    <marker id="ah-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e2584f"/></marker>
+    <marker id="ah-gold" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e8c547"/></marker>
+    <marker id="ah-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7d87a3"/></marker>
+  </defs>
+
+  <style>
+    text { font-family: "Segoe UI", Helvetica, Arial, sans-serif; fill: #e7ebf7; }
+    .mono { font-family: Consolas, "SF Mono", Menlo, monospace; }
+    .bg { fill: #0f1320; }
+    .title { font-size: 25px; font-weight: 700; fill: #f2f4fb; }
+    .subtitle { font-size: 13px; fill: #8992ac; }
+    .part-title { font-size: 16px; font-weight: 700; fill: #f2f4fb; }
+    .lane-lbl { font-weight: 700; font-size: 13px; fill: #f2f4fb; }
+    .lifeline { stroke: #384062; stroke-width: 1.6; }
+    .gridline { stroke: #2c3550; stroke-width: 1.2; stroke-dasharray: 3 5; }
+    .time-lbl { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 11.5px; fill: #6e7791; }
+    .lane-box { fill: #171d2e; stroke: #4a5478; stroke-width: 1.4; }
+    .edge-ink { stroke: #aab2c8; fill: none; stroke-width: 1.8; }
+    .edge-ink-dash { stroke: #7d87a3; fill: none; stroke-width: 1.5; stroke-dasharray: 5 4; }
+    .edge-red { stroke: #e2584f; fill: none; stroke-width: 1.8; }
+    .edge-gold { stroke: #e8c547; fill: none; stroke-width: 3; }
+    .edge-lbl { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 10.3px; fill: #c3cadf; }
+    .edge-lbl-red { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 10.3px; fill: #e2584f; }
+    .edge-lbl-gold { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 10.8px; font-weight: 700; fill: #e8c547; }
+    .lbl-bg { fill: #0f1320; opacity: 0.9; }
+    .red-t { fill: #e2584f; } .gold-t { fill: #e8c547; } .grey-t { fill: #8792ad; }
+    .state-chip { fill: #171d2e; stroke: #4a5478; stroke-width: 1.6; }
+    .state-red { fill: #2c1615; stroke: #e2584f; stroke-width: 1.6; }
+    .state-gold { fill: #2b2410; stroke: #e8c547; stroke-width: 1.8; }
+    .state-grey { fill: #1a2030; stroke: #5c6580; stroke-width: 1.4; stroke-dasharray: 5 3; }
+    .state-title { font-weight: 700; font-size: 14px; fill: #f2f4fb; }
+    .state-sub { font-size: 10.3px; fill: #8992ac; }
+    .callout { fill: #2c1615; stroke: #e2584f; stroke-width: 1.2; opacity: 0.95; }
+  </style>
+
+  <rect class="bg" x="0" y="0" width="1920" height="1500"/>
+
+  <text class="title" x="960" y="44" text-anchor="middle">QTrade — Order Lifecycle &amp; Timing</text>
+  <text class="subtitle" x="960" y="70" text-anchor="middle">A strategy's own decision is synchronous and local; every real venue outcome now arrives on a real schedule, latency_ns at a time — not in the same instant it was caused.</text>
+
+  <!-- ============ PART 1: sequence / timing ============ -->
+  <text class="part-title" x="60" y="112">Part 1 — one order's real timing (dual-clock replay, 2026-08-27)</text>
+
+  <!-- lane headers -->
+  <rect class="lane-box" x="90" y="128" width="220" height="40" rx="6"/>
+  <text class="lane-lbl" x="200" y="153" text-anchor="middle">Strategy (Ctx)</text>
+  <rect class="lane-box" x="450" y="128" width="220" height="40" rx="6"/>
+  <text class="lane-lbl" x="560" y="153" text-anchor="middle">ExecutionEngine</text>
+  <rect class="lane-box" x="860" y="128" width="220" height="40" rx="6"/>
+  <text class="lane-lbl" x="970" y="153" text-anchor="middle">Scheduler</text>
+  <rect class="lane-box" x="1270" y="128" width="220" height="40" rx="6"/>
+  <text class="lane-lbl" x="1380" y="153" text-anchor="middle">SimExchange</text>
+  <rect class="lane-box" x="1630" y="128" width="220" height="40" rx="6"/>
+  <text class="lane-lbl" x="1740" y="153" text-anchor="middle">ControlDispatcher</text>
+
+  <line x1="200" y1="168" x2="200" y2="760" class="lifeline"/>
+  <line x1="560" y1="168" x2="560" y2="760" class="lifeline"/>
+  <line x1="970" y1="168" x2="970" y2="760" class="lifeline"/>
+  <line x1="1380" y1="168" x2="1380" y2="760" class="lifeline"/>
+  <line x1="1740" y1="168" x2="1740" y2="760" class="lifeline"/>
+
+  <!-- time gridlines -->
+  <line x1="60" y1="250" x2="1880" y2="250" class="gridline"/>
+  <text class="time-lbl" x="60" y="243">t = T  (recorder_ts of the on_book/on_trade that decided to act)</text>
+  <line x1="60" y1="430" x2="1880" y2="430" class="gridline"/>
+  <text class="time-lbl" x="60" y="423">t = T + latency_ns  (OrderArrival pops)</text>
+  <line x1="60" y1="610" x2="1880" y2="610" class="gridline"/>
+  <text class="time-lbl" x="60" y="603">t = T + 2·latency_ns  (ReportDelivery pops)</text>
+
+  <!-- a1 -->
+  <line x1="200" y1="250" x2="560" y2="250" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <rect class="lbl-bg" x="210" y="258" width="420" height="16"/>
+  <text class="edge-lbl" x="215" y="270">ctx.submit(...) → submit_order_local(intent, venue: &amp;SimExchange)</text>
+
+  <rect class="callout" x="580" y="285" width="330" height="34" rx="5"/>
+  <text class="edge-lbl-red" x="590" y="298">→ Denied (terminal): Err returned the same instant,</text>
+  <text class="edge-lbl-red" x="590" y="312">the venue is never touched</text>
+
+  <line x1="560" y1="335" x2="200" y2="335" class="edge-ink-dash" marker-end="url(#ah-ink-dash)"/>
+  <rect class="lbl-bg" x="230" y="322" width="300" height="16"/>
+  <text class="edge-lbl grey-t" x="235" y="334">Ok(client_order_id) — gates passed</text>
+
+  <line x1="200" y1="365" x2="970" y2="365" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <rect class="lbl-bg" x="640" y="350" width="340" height="16"/>
+  <text class="edge-lbl" x="650" y="362" text-anchor="start">schedule OrderArrival{op_id} @ T+latency_ns</text>
+
+  <!-- a5 -->
+  <line x1="970" y1="430" x2="560" y2="430" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <rect class="lbl-bg" x="600" y="405" width="360" height="16"/>
+  <text class="edge-lbl" x="605" y="417">OrderArrival{op_id} pops → deliver_order(req, venue: &amp;mut SimExchange)</text>
+
+  <line x1="560" y1="460" x2="1380" y2="460" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <rect class="lbl-bg" x="920" y="445" width="120" height="16"/>
+  <text class="edge-lbl" x="930" y="457">venue.submit(...)</text>
+
+  <line x1="1380" y1="490" x2="560" y2="490" class="edge-ink-dash" marker-end="url(#ah-ink-dash)"/>
+  <rect class="lbl-bg" x="820" y="475" width="320" height="16"/>
+  <text class="edge-lbl grey-t" x="830" y="487">ExecReport: Rejected | Resting | Filled</text>
+
+  <rect class="callout" x="1400" y="500" width="330" height="34" rx="5"/>
+  <text class="edge-lbl-red" x="1410" y="513">→ Rejected (terminal): reached the venue,</text>
+  <text class="edge-lbl-red" x="1410" y="527">refused on its own grounds</text>
+
+  <line x1="560" y1="555" x2="970" y2="555" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <rect class="lbl-bg" x="590" y="565" width="420" height="16"/>
+  <text class="edge-lbl" x="595" y="577">apply_venue_reports → ExecOutcome → schedule ReportDelivery @ T+2·latency_ns</text>
+
+  <!-- a10 -->
+  <line x1="970" y1="610" x2="1740" y2="610" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <rect class="lbl-bg" x="1180" y="595" width="220" height="16"/>
+  <text class="edge-lbl" x="1190" y="607">ReportDelivery{op_id} pops</text>
+
+  <line x1="1740" y1="660" x2="200" y2="660" class="edge-gold" marker-end="url(#ah-gold)"/>
+  <rect class="lbl-bg" x="600" y="668" width="600" height="16"/>
+  <text class="edge-lbl-gold" x="610" y="680">dispatch(...) → on_fill / on_order_update(ctx) — the strategy learns the real outcome, here, never earlier</text>
+
+  <text class="subtitle" x="200" y="745" text-anchor="middle">decides &amp; schedules</text>
+  <text class="subtitle" x="560" y="745" text-anchor="middle">gates, then delivers</text>
+  <text class="subtitle" x="970" y="745" text-anchor="middle">one priority queue</text>
+  <text class="subtitle" x="1380" y="745" text-anchor="middle">the real matching engine</text>
+  <text class="subtitle" x="1740" y="745" text-anchor="middle">only caller of on_fill</text>
+
+  <!-- ============ PART 2: state machine ============ -->
+  <line x1="60" y1="810" x2="1860" y2="810" stroke="#2c3550" stroke-width="1.5"/>
+  <text class="part-title" x="60" y="850">Part 2 — the eleven-state order machine (D36), badged by grouping</text>
+  <text class="subtitle mono" x="60" y="872">is_open = "still resting" &#183; is_inflight = "a message is out, awaiting a venue response" &#183; is_terminal = "nothing further can happen"</text>
+
+  <!-- Row 1 -->
+  <rect class="state-chip" x="60" y="900" width="180" height="60" rx="8"/>
+  <text class="state-title" x="150" y="925" text-anchor="middle">Initialized</text>
+  <text class="state-sub" x="150" y="944" text-anchor="middle">(start state)</text>
+
+  <rect class="state-chip" x="360" y="900" width="180" height="60" rx="8"/>
+  <text class="state-title" x="450" y="925" text-anchor="middle">Submitted</text>
+  <text class="state-sub" x="450" y="944" text-anchor="middle">is_inflight</text>
+
+  <rect class="state-chip" x="660" y="900" width="180" height="60" rx="8"/>
+  <text class="state-title" x="750" y="925" text-anchor="middle">Accepted</text>
+  <text class="state-sub" x="750" y="944" text-anchor="middle">is_open</text>
+
+  <rect class="state-chip" x="960" y="900" width="180" height="60" rx="8"/>
+  <text class="state-title" x="1050" y="925" text-anchor="middle">PartiallyFilled</text>
+  <text class="state-sub" x="1050" y="944" text-anchor="middle">is_open</text>
+
+  <!-- Row 2 -->
+  <rect class="state-red" x="60" y="1020" width="180" height="60" rx="8"/>
+  <text class="state-title red-t" x="150" y="1045" text-anchor="middle">Denied</text>
+  <text class="state-sub" x="150" y="1064" text-anchor="middle">is_terminal</text>
+
+  <rect class="state-red" x="360" y="1020" width="180" height="60" rx="8"/>
+  <text class="state-title red-t" x="450" y="1045" text-anchor="middle">Rejected</text>
+  <text class="state-sub" x="450" y="1064" text-anchor="middle">is_terminal</text>
+
+  <rect class="state-chip" x="660" y="1020" width="180" height="60" rx="8"/>
+  <text class="state-title" x="750" y="1045" text-anchor="middle">PendingUpdate</text>
+  <text class="state-sub" x="750" y="1064" text-anchor="middle">is_open &#183; is_inflight</text>
+
+  <rect class="state-chip" x="960" y="1020" width="180" height="60" rx="8"/>
+  <text class="state-title" x="1050" y="1045" text-anchor="middle">PendingCancel</text>
+  <text class="state-sub" x="1050" y="1064" text-anchor="middle">is_open &#183; is_inflight</text>
+
+  <!-- Row 3 -->
+  <rect class="state-grey" x="660" y="1150" width="180" height="60" rx="8"/>
+  <text class="state-title" x="750" y="1175" text-anchor="middle">Expired</text>
+  <text class="state-sub" x="750" y="1194" text-anchor="middle">is_terminal (no live caller today)</text>
+
+  <rect class="state-grey" x="960" y="1150" width="180" height="60" rx="8"/>
+  <text class="state-title" x="1050" y="1175" text-anchor="middle">Canceled</text>
+  <text class="state-sub" x="1050" y="1194" text-anchor="middle">is_terminal</text>
+
+  <rect class="state-gold" x="1300" y="1060" width="220" height="70" rx="8"/>
+  <text class="state-title gold-t" x="1410" y="1085" text-anchor="middle">Filled</text>
+  <text class="state-sub" x="1410" y="1104" text-anchor="middle">is_terminal</text>
+  <text class="state-sub" x="1410" y="1120" text-anchor="middle">reachable from Accepted, PartiallyFilled, or the race below</text>
+
+  <!-- transitions -->
+  <line x1="150" y1="960" x2="150" y2="1020" class="edge-red" marker-end="url(#ah-red)"/>
+  <rect class="lbl-bg" x="158" y="978" width="330" height="16"/>
+  <text class="edge-lbl-red" x="164" y="990">gate fails: TickSize / FreezeQty / LocalOtrOrRate / UnknownInstrument</text>
+
+  <line x1="240" y1="930" x2="360" y2="930" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <text class="edge-lbl" x="250" y="923">gates pass</text>
+
+  <line x1="450" y1="960" x2="450" y2="1020" class="edge-red" marker-end="url(#ah-red)"/>
+  <rect class="lbl-bg" x="458" y="978" width="380" height="16"/>
+  <text class="edge-lbl-red" x="464" y="990">venue refuses: WouldCross / NoLiquidityForResidual / OtrOrRateExceeded</text>
+
+  <line x1="540" y1="930" x2="660" y2="930" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <text class="edge-lbl" x="548" y="923">venue accepts / rests</text>
+
+  <line x1="840" y1="930" x2="960" y2="930" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <text class="edge-lbl" x="850" y="923">partial fill</text>
+
+  <line x1="750" y1="960" x2="750" y2="1020" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <rect class="lbl-bg" x="758" y="982" width="180" height="16"/>
+  <text class="edge-lbl" x="764" y="994">ctx.modify() requested</text>
+
+  <path d="M960,945 L850,1030 L840,1050" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <rect class="lbl-bg" x="845" y="990" width="180" height="16"/>
+  <text class="edge-lbl" x="850" y="1002">ctx.modify() requested</text>
+
+  <line x1="805" y1="960" x2="770" y2="1150" class="edge-ink-dash" marker-end="url(#ah-ink-dash)"/>
+  <rect class="lbl-bg" x="810" y="1050" width="230" height="16"/>
+  <text class="edge-lbl grey-t" x="815" y="1062">mark_expired — no live caller today</text>
+
+  <path d="M840,910 L1300,1080" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <rect class="lbl-bg" x="1020" y="965" width="80" height="16"/>
+  <text class="edge-lbl" x="1030" y="977">full fill</text>
+
+  <path d="M1140,930 L1300,1000 L1300,1075" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <rect class="lbl-bg" x="1150" y="965" width="150" height="16"/>
+  <text class="edge-lbl" x="1160" y="977">remaining qty fills</text>
+
+  <line x1="840" y1="1050" x2="960" y2="1050" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <rect class="lbl-bg" x="845" y="1030" width="190" height="16"/>
+  <text class="edge-lbl" x="850" y="1042">ctx.cancel() requested (direct, D36)</text>
+
+  <line x1="1050" y1="1080" x2="1050" y2="1150" class="edge-ink" marker-end="url(#ah-ink)"/>
+  <rect class="lbl-bg" x="1058" y="1108" width="180" height="16"/>
+  <text class="edge-lbl" x="1064" y="1120">venue confirms cancel</text>
+
+  <path d="M1140,1040 L1300,1095" class="edge-gold" marker-end="url(#ah-gold)"/>
+  <rect class="lbl-bg" x="1160" y="1002" width="420" height="34"/>
+  <text class="edge-lbl-gold" x="1166" y="1015">THE RACE: a real trade fills it first —</text>
+  <text class="edge-lbl-gold" x="1166" y="1029">handle_exec_reports resolves to Filled, unconditionally</text>
+
+  <text class="subtitle mono" x="1050" y="1225" text-anchor="middle">cancel reasons: OrderMassDelete (real) &#183; Mmp / Watchdog / SessionLoss / Risk (declared, no producing code yet)</text>
+
+  <text class="subtitle" x="960" y="1470" text-anchor="middle">Real, 21_08_2026: every Submitted→Filled/Rejected pair in orders.log sits exactly latency_ns apart — direct evidence Part 1's schedule, not a shortcut, produced every fill.</text>
+</svg>

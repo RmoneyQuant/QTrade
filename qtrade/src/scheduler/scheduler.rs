@@ -9,8 +9,20 @@
 //!
 //! No Cache, no dispatch-to-strategy logic (T05), no latency model
 //! (T06). This is the loop, the clock, and the priority queue -- nothing
-//! else. `dispatch` below is a caller-supplied closure; the real
-//! strategy-facing dispatcher is a later component.
+//! else. Dispatch (matching a popped `Event` against what it means and
+//! calling the right thing) lives entirely in `main.rs`'s own loop, not
+//! here -- same D07 principle EventDispatcher/ControlDispatcher already
+//! follow ("routing knowledge lives in startup wiring, never inside
+//! either dispatcher").
+//!
+//! **One deliberate exception, added 2026-08-27** (dual-clock replay):
+//! `EventPayload::MarketData` carries a real `decoder::DecodedMessage` so
+//! it's actually useful to `main.rs`'s dispatch -- the one dependency
+//! this module takes on, still well below `cache`/`execution`/
+//! `simulator` in the stack. `OrderArrival`/`ReportDelivery` stay opaque
+//! (`op_id: u64`) precisely to avoid needing `execution`/`simulator`
+//! types here too -- `main.rs` interprets the id against its own pending-
+//! ops table; this module never does.
 //!
 //! ## Convention carried over from `decoder`
 //!
@@ -23,6 +35,8 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::fmt;
+
+use crate::decoder::DecodedMessage;
 
 // ---------------------------------------------------------------------
 // Time
@@ -176,36 +190,56 @@ impl fmt::Display for EventClass {
 // "fires at T + latency" generically for sources nothing feeds yet.
 // ---------------------------------------------------------------------
 
-/// What an event actually carries. Every variant here is either (a) one
-/// of the two sources this phase synthesizes test events for --
-/// `MarketData`, `StrategyTimer` -- or (b) a shape-only placeholder for
-/// a source FR-B14 lists but that has nothing to feed it until later
-/// components exist (`OrderArrival`/`ReportDelivery` wait on `simulator`,
-/// T06; `SessionTransition`/`StalenessOrHeartbeatTimeout`/
-/// `WatchdogExpiry`/`OffloadCompletion` wait on components not yet
-/// built). Nothing about the *loop* changes once real producers exist --
-/// they will just call `Scheduler::schedule` with a real payload instead
-/// of a synthesized one, which is the point of proving the shape now.
+/// Which independent consumer a `MarketData` delivery is for -- the dual-
+/// clock replay's own split (2026-08-27): the same real message reaches
+/// `SimExchange` and `Cache` at two different scheduled times (`exchange_ts`
+/// and `recorder_ts` respectively), never through a read path between
+/// them (D10 stays intact). One `EventClass::MarketData` covers both --
+/// they essentially never land on the identical timestamp in practice
+/// (verified against real data: the delta is never zero), so they don't
+/// need a tie-break relationship with each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    SimExchange,
+    Cache,
+}
+
+impl fmt::Display for Target {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Target::SimExchange => write!(f, "SimExchange"),
+            Target::Cache => write!(f, "Cache"),
+        }
+    }
+}
+
+/// What an event actually carries. `MarketData` and `OrderArrival`/
+/// `ReportDelivery` are real, wired producers (dual-clock replay,
+/// 2026-08-27) driven by `main.rs`. `StrategyTimer` is still a
+/// synthesized stand-in for a strategy's `set_timer`/`set_alarm` --
+/// nothing calls it yet. `SessionTransition`/`StalenessOrHeartbeatTimeout`/
+/// `WatchdogExpiry`/`OffloadCompletion` remain shape-only placeholders,
+/// waiting on components not yet built.
 #[derive(Debug, Clone)]
 pub enum EventPayload {
-    /// A synthesized stand-in for a decoded market event. Once `book`
-    /// exists this becomes a real decoded/book-applied type; today it's
-    /// just enough to exercise the loop (an instrument tag + a sequence
-    /// number, so test output is distinguishable and inspectable).
-    MarketData { instrument: u32, sequence: u64 },
+    /// One decoded real message, destined for one of the two independent
+    /// consumers. `seq_no`/`exchange_ts`/`recorder_ts` are carried
+    /// alongside `message` purely for logging/debugging -- the event's
+    /// own `timestamp` (whichever of the two this delivery was scheduled
+    /// at) is what actually drives dispatch.
+    MarketData { target: Target, message: DecodedMessage, seq_no: u64, exchange_ts: u64, recorder_ts: i64 },
     /// A synthesized stand-in for a strategy's `set_timer`/`set_alarm`.
     StrategyTimer { label: &'static str },
-    /// Shape-only (FR-B14): "this order becomes visible to the venue at
-    /// T + outbound latency". No latency model computes this timestamp
-    /// yet (that's `simulator`, T06) -- but the scheduler can already
-    /// accept an arbitrary future `Timestamp` for any `EventClass`, which
-    /// is all a "fires at T + latency" event ever needed from this
-    /// component. See the `run()` test below, which schedules one by
-    /// hand to prove the shape works end to end.
-    OrderArrival { client_order_id: u64 },
-    /// Shape-only (FR-B14): "a fill is learned at T + inbound latency".
-    /// Same status as `OrderArrival` above.
-    ReportDelivery { client_order_id: u64 },
+    /// "This order (or cancel/modify delivery) becomes visible to the
+    /// venue at T + latency." `op_id` is deliberately opaque -- it is
+    /// never a `client_order_id` directly (a cancel/modify delivery isn't
+    /// "a new order"), it's a key into `main.rs`'s own pending-ops table,
+    /// which this module never reads.
+    OrderArrival { op_id: u64 },
+    /// "A fill/order-update is learned at T + latency." Same opaque-`op_id`
+    /// convention as `OrderArrival` -- `main.rs` looks up what was
+    /// actually produced and hands it to `ControlDispatcher::dispatch`.
+    ReportDelivery { op_id: u64 },
     /// Shape-only: venue session-state change.
     SessionTransition { session: &'static str },
     /// Shape-only: silence past threshold (FR-B14, FR-02).
@@ -219,16 +253,12 @@ pub enum EventPayload {
 impl fmt::Display for EventPayload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EventPayload::MarketData { instrument, sequence } => {
-                write!(f, "MarketData(instrument={instrument}, seq={sequence})")
+            EventPayload::MarketData { target, seq_no, exchange_ts, recorder_ts, .. } => {
+                write!(f, "MarketData(target={target}, seq={seq_no}, exchange_ts={exchange_ts}, recorder_ts={recorder_ts})")
             }
             EventPayload::StrategyTimer { label } => write!(f, "StrategyTimer({label})"),
-            EventPayload::OrderArrival { client_order_id } => {
-                write!(f, "OrderArrival(client_order_id={client_order_id})")
-            }
-            EventPayload::ReportDelivery { client_order_id } => {
-                write!(f, "ReportDelivery(client_order_id={client_order_id})")
-            }
+            EventPayload::OrderArrival { op_id } => write!(f, "OrderArrival(op_id={op_id})"),
+            EventPayload::ReportDelivery { op_id } => write!(f, "ReportDelivery(op_id={op_id})"),
             EventPayload::SessionTransition { session } => write!(f, "SessionTransition({session})"),
             EventPayload::StalenessTimeout => write!(f, "StalenessTimeout"),
             EventPayload::WatchdogExpiry => write!(f, "WatchdogExpiry"),
@@ -355,6 +385,18 @@ impl Scheduler {
         self.heap.len()
     }
 
+    /// The earliest queued event's timestamp, without removing it --
+    /// added for `main.rs`'s own interleaved read-then-drain loop (dual-
+    /// clock replay, 2026-08-27): safe to drain everything strictly
+    /// before the next unread file record's `exchange_ts` (exchange_ts is
+    /// monotonic non-decreasing across one venue's stream, D05), but only
+    /// once that next record has actually been read and its own
+    /// `exchange_ts` is known -- this is what lets the caller check
+    /// "is it safe yet" without popping and needing to push back.
+    pub fn peek_earliest_timestamp(&self) -> Option<Timestamp> {
+        self.heap.peek().map(|Reverse(e)| e.timestamp)
+    }
+
     /// FR-B12's loop, verbatim: pop earliest, advance the clock to it
     /// (the *only* place time moves), dispatch. `dispatch` receives
     /// `&mut Scheduler` and `&SimClock` so a handler can enqueue further
@@ -387,6 +429,20 @@ impl Scheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decoder::{DecodedMessage, UnknownMessage};
+
+    /// A lightweight, distinguishable `DecodedMessage` for tests that
+    /// only care about scheduling/ordering, not decode content --
+    /// `Unknown` is the decoder's own "seen, no verified layout" variant,
+    /// perfect for this since these tests never inspect the message
+    /// itself, only which event carried it and when.
+    fn dummy_message(tag: u16) -> DecodedMessage {
+        DecodedMessage::Unknown(UnknownMessage { seq: tag as u32, template_id: tag, body_len: 0 })
+    }
+
+    fn dummy_market_data(target: Target, tag: u16) -> EventPayload {
+        EventPayload::MarketData { target, message: dummy_message(tag), seq_no: tag as u64, exchange_ts: 0, recorder_ts: 0 }
+    }
 
     /// Schedules a fixed, hand-written sequence of events -- market data
     /// and strategy timers, the two sources this phase synthesizes test
@@ -408,22 +464,18 @@ mod tests {
         let mut log = String::new();
 
         // Enqueued in this exact order, every run.
-        scheduler.schedule(1_000, EventClass::MarketData, EventPayload::MarketData { instrument: 1, sequence: 1 });
+        scheduler.schedule(1_000, EventClass::MarketData, dummy_market_data(Target::Cache, 1));
         scheduler.schedule(1_000, EventClass::StrategyTimer, EventPayload::StrategyTimer { label: "quote_refresh" });
-        scheduler.schedule(1_500, EventClass::MarketData, EventPayload::MarketData { instrument: 2, sequence: 2 });
+        scheduler.schedule(1_500, EventClass::MarketData, dummy_market_data(Target::Cache, 2));
         scheduler.schedule(2_000, EventClass::StrategyTimer, EventPayload::StrategyTimer { label: "risk_check" });
-        scheduler.schedule(2_000, EventClass::MarketData, EventPayload::MarketData { instrument: 1, sequence: 3 });
+        scheduler.schedule(2_000, EventClass::MarketData, dummy_market_data(Target::Cache, 3));
 
         scheduler.run(&mut clock, |sched, clk, event| {
             log.push_str(&format!("now={:<20} dispatch: {}\n", clk.now(), event));
-            if let EventPayload::MarketData { sequence: 2, .. } = event.payload {
+            if let EventPayload::MarketData { seq_no: 2, .. } = event.payload {
                 // Handler enqueues a follow-up event at T + 250 -- the
                 // "fires at T + latency" shape, exercised for real.
-                sched.schedule(
-                    event.timestamp + 250,
-                    EventClass::OrderArrival,
-                    EventPayload::OrderArrival { client_order_id: 42 },
-                );
+                sched.schedule(event.timestamp + 250, EventClass::OrderArrival, EventPayload::OrderArrival { op_id: 42 });
             }
         });
 
@@ -474,16 +526,16 @@ mod tests {
 
         // Same timestamp, same class (MarketData), enqueued B before A.
         // seq alone must decide: B (seq=0) dispatches before A (seq=1).
-        scheduler.schedule(5_000, EventClass::MarketData, EventPayload::MarketData { instrument: 99, sequence: 100 }); // "B", seq=0
-        scheduler.schedule(5_000, EventClass::MarketData, EventPayload::MarketData { instrument: 99, sequence: 101 }); // "A", seq=1
+        scheduler.schedule(5_000, EventClass::MarketData, dummy_market_data(Target::Cache, 100)); // "B", seq=0
+        scheduler.schedule(5_000, EventClass::MarketData, dummy_market_data(Target::Cache, 101)); // "A", seq=1
 
         // Same timestamp, OrderArrival enqueued *before* MarketData.
         // Enqueue order alone would fire OrderArrival first (seq=2 <
         // seq=3) -- the class rank must override that: MarketData (an
         // exogenous fact) still dispatches first, even though it was
         // enqueued second.
-        scheduler.schedule(6_000, EventClass::OrderArrival, EventPayload::OrderArrival { client_order_id: 7 }); // seq=2
-        scheduler.schedule(6_000, EventClass::MarketData, EventPayload::MarketData { instrument: 5, sequence: 200 }); // seq=3
+        scheduler.schedule(6_000, EventClass::OrderArrival, EventPayload::OrderArrival { op_id: 7 }); // seq=2
+        scheduler.schedule(6_000, EventClass::MarketData, dummy_market_data(Target::Cache, 200)); // seq=3
 
         scheduler.run(&mut clock, |_sched, clk, event| {
             log.push_str(&format!("now={} seq={} class={} {}\n", clk.now(), event.seq, event.event_class, event.payload));

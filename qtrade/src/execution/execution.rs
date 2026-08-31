@@ -44,6 +44,7 @@
 //! and the Tier 1 report itself.
 
 use crate::decoder::DecodedMessage;
+use crate::logging;
 use crate::simulator::{self, CancelReason as VenueCancelReason, ExecReport, FillKind, NewOrderRequest, OrderType, OtrConfig, RejectReason, SimExchange};
 use crate::types::{Instrument, InstrumentId, Lots, Price, Qty, Side};
 
@@ -1020,7 +1021,6 @@ pub enum GateOutcome {
 pub struct ExecutionEngine {
     clord: ClOrdIdGen,
     instruments: HashMap<InstrumentId, Instrument>,
-    venue: SimExchange,
     rms: Box<dyn Rms>,
     local_otr: LocalOtrGovernor,
     cost_model: CostModel,
@@ -1051,17 +1051,13 @@ pub struct ExecutionEngine {
 }
 
 impl ExecutionEngine {
-    pub fn new(
-        run_config: RunConfig,
-        instruments: Vec<Instrument>,
-        rms: Box<dyn Rms>,
-        cost_config: CostConfig,
-        venue_otr_cfg: OtrConfig,
-        markout_horizons_ns: Vec<u64>,
-        tier2_enabled: bool,
-    ) -> Self {
-        let ids: Vec<InstrumentId> = instruments.iter().map(|i| i.id).collect();
-        let venue = SimExchange::new(&ids, venue_otr_cfg);
+    /// No longer builds `SimExchange` -- it moved out to `main.rs`'s own
+    /// ownership (dual-clock replay, 2026-08-27): the Scheduler feeds it
+    /// market events directly now (ARCHITECTURE.md §5.3 step 7, finally
+    /// real), so it can't stay a private field only `ExecutionEngine`
+    /// reaches. Construct `SimExchange::new(&ids, venue_otr_cfg)` in
+    /// `main.rs` instead, alongside this call.
+    pub fn new(run_config: RunConfig, instruments: Vec<Instrument>, rms: Box<dyn Rms>, cost_config: CostConfig, markout_horizons_ns: Vec<u64>, tier2_enabled: bool) -> Self {
         let clord = ClOrdIdGen::new(run_config.session_id);
         let local_otr = LocalOtrGovernor::new(run_config.local_otr);
         let mut map = HashMap::new();
@@ -1071,7 +1067,6 @@ impl ExecutionEngine {
         ExecutionEngine {
             clord,
             instruments: map,
-            venue,
             rms,
             local_otr,
             cost_model: CostModel::new(cost_config),
@@ -1136,6 +1131,21 @@ impl ExecutionEngine {
         self.instruments.get(&id)
     }
 
+    /// The single choke point for every order-state-transition message
+    /// this engine ever produces -- both the existing `OrderEventRecord`
+    /// (feeds `orders.log`, unchanged) and, since the 2026-08-27
+    /// component-level event logging pass, a live `tracing::info!` line
+    /// for the same transition, tagged by `resulting_state` itself
+    /// (`Submitted`, `Denied`, `Accepted`, `Rejected`, `Filled`,
+    /// `Canceled`, ...) rather than a second, parallel tag vocabulary --
+    /// so a reader can cross-reference straight against
+    /// `execution_user_doc.md`'s state machine. This is what makes
+    /// "ExecutionEngine confirms order placed" / "ExecutionEngine relays
+    /// the venue's response" real: both are just this same function,
+    /// called from a different transition. The `tracing::info!` call
+    /// itself is a cheap, non-blocking channel push (`logging::init`'s
+    /// own doc comment) -- never a direct file/stdout write on this
+    /// (possibly hot) call path.
     fn log_event(&mut self, client_order_id: u64, description: &str, resulting_state: OrderState, now_ns: u64) {
         if self.tier2_enabled {
             self.order_events.push(OrderEventRecord {
@@ -1145,54 +1155,69 @@ impl ExecutionEngine {
                 resulting_state,
             });
         }
+        tracing::info!("{}", logging::line("ExecutionEngine", Some(now_ns), &format!("{resulting_state:?}"), &format!("client_order_id={client_order_id} {description}")));
     }
 
     // ---- gates + submission (FR-B27, D36) ----
 
-    /// Runs Validation -> RMS -> local OTR governor, then (only if all
-    /// three pass) forwards to the venue, and hands back whatever
-    /// fills/order-events this one call produced -- see `ExecOutcome`'s
-    /// own doc comment. A before/after snapshot of `self.fills`/
-    /// `self.order_events`' lengths around the unchanged original body
-    /// (`submit_order_inner`), not a new accounting path.
-    pub fn submit_order(&mut self, intent: NewOrderIntent, now_ns: u64) -> (GateOutcome, ExecOutcome) {
+    /// Runs Validation -> RMS -> local OTR governor -- **and stops
+    /// there**. Dual-clock replay (2026-08-27): the venue was reachable
+    /// synchronously in the same call before real order latency existed;
+    /// now reaching it is a scheduled `OrderArrival` event, so this
+    /// method can only ever report the local gate outcome. On `Denied`,
+    /// that's the whole story (D36: local rejections are terminal,
+    /// synchronous, and never reach the venue at all). On gates-passed,
+    /// the returned `NewOrderRequest` is what the caller (`strategy::Ctx`)
+    /// schedules for delivery later, at `now_ns + latency_ns`.
+    ///
+    /// `venue` is read-only here (`&SimExchange`, not `&mut`) -- used only
+    /// for `pre_submit_best_same_side` (the "was this quote spread-
+    /// improving" reporting field, D26). **Disclosed nuance**: this reads
+    /// the venue's *true*, currently-most-advanced book (it runs ahead of
+    /// what `Cache`/the strategy can see, by design -- see the book-lag
+    /// property, decision #12 of the 2026-08-27 planning session), not
+    /// the strategy's own delayed view. Acceptable because this field is
+    /// a downstream reporting label, never a decision input the strategy
+    /// itself reads back.
+    pub fn submit_order_local(&mut self, intent: NewOrderIntent, now_ns: u64, venue: &SimExchange) -> (GateOutcome, Option<NewOrderRequest>, ExecOutcome) {
         let (fills_before, events_before) = (self.fills.len(), self.order_events.len());
-        let outcome = self.submit_order_inner(intent, now_ns);
-        (outcome, ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() })
+        let (outcome, req) = self.submit_order_local_inner(intent, now_ns, venue);
+        (outcome, req, ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() })
     }
 
-    /// Runs Validation -> RMS -> local OTR governor, in that order, then
-    /// (only if all three pass) forwards to the venue. The order record
-    /// is created **before** the gates run, per FR-B27, so a
+    /// Runs Validation -> RMS -> local OTR governor, in that order. The
+    /// order record is created **before** the gates run, per FR-B27, so a
     /// locally-denied order still exists, still shows up in `order()`
     /// and in reporting, and still counts toward the local OTR governor
     /// if it reached that gate (and only if it reached that gate --
-    /// Validation/RMS failures never touch `local_otr` at all).
-    fn submit_order_inner(&mut self, intent: NewOrderIntent, now_ns: u64) -> GateOutcome {
+    /// Validation/RMS failures never touch `local_otr` at all). Stops
+    /// after gates pass and returns the constructed `NewOrderRequest`
+    /// instead of forwarding it -- see `deliver_order_inner` for the rest
+    /// of what this function used to do in one call.
+    fn submit_order_local_inner(&mut self, intent: NewOrderIntent, now_ns: u64, venue: &SimExchange) -> (GateOutcome, Option<NewOrderRequest>) {
         let client_order_id = self.clord.next();
         self.message_counts.new_order_attempts += 1;
 
         let Some(instrument) = self.instruments.get(&intent.instrument).cloned() else {
             self.deny(client_order_id, &intent, DenyReason::UnknownInstrument, now_ns);
-            return GateOutcome::Denied { client_order_id, reason: DenyReason::UnknownInstrument };
+            return (GateOutcome::Denied { client_order_id, reason: DenyReason::UnknownInstrument }, None);
         };
 
         if let Err(reason) = validate(&instrument, &intent) {
             self.deny(client_order_id, &intent, reason, now_ns);
-            return GateOutcome::Denied { client_order_id, reason };
+            return (GateOutcome::Denied { client_order_id, reason }, None);
         }
         if !self.rms.check(&intent, &self.portfolio) {
             self.deny(client_order_id, &intent, DenyReason::RmsRejected, now_ns);
-            return GateOutcome::Denied { client_order_id, reason: DenyReason::RmsRejected };
+            return (GateOutcome::Denied { client_order_id, reason: DenyReason::RmsRejected }, None);
         }
         if self.local_otr.would_breach(now_ns) {
             self.deny(client_order_id, &intent, DenyReason::LocalOtrOrRate, now_ns);
-            return GateOutcome::Denied { client_order_id, reason: DenyReason::LocalOtrOrRate };
+            return (GateOutcome::Denied { client_order_id, reason: DenyReason::LocalOtrOrRate }, None);
         }
         self.local_otr.record(now_ns);
 
-        let (pre_bid, pre_ask) = self
-            .venue
+        let (pre_bid, pre_ask) = venue
             .book(intent.instrument)
             .map(|b| (b.best_bid().map(|l| l.price), b.best_ask().map(|l| l.price)))
             .unwrap_or((None, None));
@@ -1229,11 +1254,24 @@ impl ExecutionEngine {
         self.log_event(client_order_id, "submit: gates passed, forwarding to venue", OrderState::Submitted, now_ns);
 
         let req = NewOrderRequest { client_order_id, instrument: intent.instrument, side: intent.side, order_type: intent.order_type, qty: requested_qty };
+        (GateOutcome::Submitted { client_order_id }, Some(req))
+    }
+
+    /// The other half of what `submit_order_inner` used to do in one
+    /// call: the order actually reaches the venue. Called when a
+    /// scheduled `OrderArrival` event fires (`main.rs`), never
+    /// synchronously with `submit_order_local` anymore.
+    pub fn deliver_order(&mut self, req: NewOrderRequest, now_ns: u64, venue: &mut SimExchange) -> ExecOutcome {
+        let (fills_before, events_before) = (self.fills.len(), self.order_events.len());
+        self.deliver_order_inner(req, now_ns, venue);
+        ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() }
+    }
+
+    fn deliver_order_inner(&mut self, req: NewOrderRequest, now_ns: u64, venue: &mut SimExchange) {
         self.venue_submit_calls += 1;
         self.message_counts.submitted_to_venue += 1;
-        let reports = self.venue.submit(req, now_ns);
+        let reports = venue.submit(req, now_ns);
         self.handle_exec_reports(reports, now_ns);
-        GateOutcome::Submitted { client_order_id }
     }
 
     fn deny(&mut self, client_order_id: u64, intent: &NewOrderIntent, reason: DenyReason, now_ns: u64) {
@@ -1291,25 +1329,35 @@ impl ExecutionEngine {
     }
 
     /// Same `ExecOutcome`-returning wrapper, around the unchanged
-    /// `deliver_cancel_to_venue_inner`.
-    pub fn deliver_cancel_to_venue(&mut self, client_order_id: u64, now_ns: u64) -> ExecOutcome {
+    /// `deliver_cancel_to_venue_inner`. `venue` is a parameter now, not
+    /// `self.venue` -- `SimExchange` moved out to `main.rs`'s own
+    /// ownership (dual-clock replay, 2026-08-27), reachable from more
+    /// than one caller (the Scheduler's direct market-event feed, and
+    /// this order path), same borrowed-through pattern
+    /// `ControlDispatcher::subscribe` already uses for `EventDispatcher`.
+    pub fn deliver_cancel_to_venue(&mut self, client_order_id: u64, now_ns: u64, venue: &mut SimExchange) -> ExecOutcome {
         let (fills_before, events_before) = (self.fills.len(), self.order_events.len());
-        self.deliver_cancel_to_venue_inner(client_order_id, now_ns);
+        self.deliver_cancel_to_venue_inner(client_order_id, now_ns, venue);
         ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() }
     }
 
-    /// Phase 2: the cancel message actually reaches the venue. Between
-    /// `request_cancel` and this call, `on_market_event` may have already
-    /// filled the order at the venue -- `SimExchange` has no notion of
-    /// "pending cancel," it just still had the order resting until
-    /// something removed it. If that happened, `self.venue.cancel(...)`
-    /// finds nothing resting and returns an empty `Vec`; `handle_exec_reports`
-    /// then has nothing to apply, and the order is left exactly as the
-    /// fill already left it: `Filled`. This is the race, made real rather
-    /// than asserted by inspection.
-    fn deliver_cancel_to_venue_inner(&mut self, client_order_id: u64, now_ns: u64) {
+    /// Phase 2: the cancel message actually reaches the venue -- now a
+    /// scheduled `OrderArrival`-class event, fired from `main.rs`, not a
+    /// synchronous continuation of `request_cancel` (dual-clock replay,
+    /// 2026-08-27). Between `request_cancel` and this call, a real market
+    /// event may have already filled the order at the venue --
+    /// `SimExchange` has no notion of "pending cancel," it just still had
+    /// the order resting until something removed it. If that happened,
+    /// `venue.cancel(...)` finds nothing resting and returns an empty
+    /// `Vec`; `handle_exec_reports` then has nothing to apply, and the
+    /// order is left exactly as the fill already left it: `Filled`. This
+    /// is the race, made real rather than asserted by inspection -- and
+    /// with real order latency now, a genuinely non-zero span of
+    /// simulated time for a fill to beat a cancel through, not merely a
+    /// same-instant possibility.
+    fn deliver_cancel_to_venue_inner(&mut self, client_order_id: u64, now_ns: u64, venue: &mut SimExchange) {
         self.venue_cancel_calls += 1;
-        let reports = self.venue.cancel(client_order_id, now_ns);
+        let reports = venue.cancel(client_order_id, now_ns);
         self.handle_exec_reports(reports, now_ns);
     }
 
@@ -1333,16 +1381,17 @@ impl ExecutionEngine {
         true
     }
 
-    /// Same `ExecOutcome`-returning wrapper as `deliver_cancel_to_venue`.
-    pub fn deliver_modify_to_venue(&mut self, client_order_id: u64, new_qty: Qty, new_price: Option<Price>, now_ns: u64) -> ExecOutcome {
+    /// Same `ExecOutcome`-returning wrapper as `deliver_cancel_to_venue`,
+    /// same `venue` parameter, same reason.
+    pub fn deliver_modify_to_venue(&mut self, client_order_id: u64, new_qty: Qty, new_price: Option<Price>, now_ns: u64, venue: &mut SimExchange) -> ExecOutcome {
         let (fills_before, events_before) = (self.fills.len(), self.order_events.len());
-        self.deliver_modify_to_venue_inner(client_order_id, new_qty, new_price, now_ns);
+        self.deliver_modify_to_venue_inner(client_order_id, new_qty, new_price, now_ns, venue);
         ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() }
     }
 
-    fn deliver_modify_to_venue_inner(&mut self, client_order_id: u64, new_qty: Qty, new_price: Option<Price>, now_ns: u64) {
+    fn deliver_modify_to_venue_inner(&mut self, client_order_id: u64, new_qty: Qty, new_price: Option<Price>, now_ns: u64, venue: &mut SimExchange) {
         self.venue_modify_calls += 1;
-        let reports = self.venue.modify(client_order_id, new_qty, new_price, now_ns);
+        let reports = venue.modify(client_order_id, new_qty, new_price, now_ns);
         self.handle_exec_reports(reports, now_ns);
     }
 
@@ -1382,28 +1431,40 @@ impl ExecutionEngine {
     /// reporting "no one was ahead of you" for an order that in fact
     /// queued behind real size. See execution_user_doc.md for the test
     /// that caught this and the fix.
-    /// Same `ExecOutcome`-returning wrapper as `submit_order`, around the
-    /// unchanged `on_market_event_inner` -- this is the one of the seven
-    /// wrapped methods `main.rs`'s real replay loop actually calls every
-    /// event, and therefore the one real path `control_dispatcher`
-    /// currently ever receives anything through.
-    pub fn on_market_event(&mut self, event: &DecodedMessage, now_ns: u64) -> ExecOutcome {
-        let (fills_before, events_before) = (self.fills.len(), self.order_events.len());
-        self.on_market_event_inner(event, now_ns);
-        ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() }
-    }
-
-    fn on_market_event_inner(&mut self, event: &DecodedMessage, now_ns: u64) {
+    /// Replaces `on_market_event` (deleted, dual-clock replay,
+    /// 2026-08-27): `SimExchange` is no longer a private field this
+    /// engine intercepts every market event through -- `main.rs`'s
+    /// Scheduler feeds it directly now (ARCHITECTURE.md §5.3 step 7,
+    /// finally real; D10, the live gateway is never fed market data
+    /// either, so this pass-through never had a live counterpart to
+    /// begin with). This method carries everything `ExecutionEngine`
+    /// itself still needs to do immediately before `main.rs` calls
+    /// `venue.apply_market_event(...)` directly: capturing each open
+    /// order's genuine queue position the first time it's observed (see
+    /// `pre_event_qty_ahead`'s own long-standing doc comment) and
+    /// counting the event for reporting. No gate exists here, same as
+    /// before -- a market event always reaches the venue, unconditionally.
+    pub fn prepare_for_market_event(&mut self, venue: &SimExchange) {
         for (&id, order) in self.orders.iter() {
             if order.state.is_open() {
-                if let Some(ahead) = self.venue.resting_qty_ahead(id) {
+                if let Some(ahead) = venue.resting_qty_ahead(id) {
                     self.pre_event_qty_ahead.entry(id).or_insert(ahead);
                 }
             }
         }
         self.message_counts.market_events_applied += 1;
-        let reports = self.venue.apply_market_event(event, now_ns);
+    }
+
+    /// The other half: `main.rs` calls `venue.apply_market_event(...)`
+    /// itself (after `prepare_for_market_event`), then hands the
+    /// resulting reports here to run through the same accounting path
+    /// every other venue interaction already uses, wrapped in the same
+    /// `ExecOutcome` snapshot pattern as `deliver_order`/
+    /// `deliver_cancel_to_venue`/`deliver_modify_to_venue`.
+    pub fn apply_venue_reports(&mut self, reports: Vec<ExecReport>, now_ns: u64) -> ExecOutcome {
+        let (fills_before, events_before) = (self.fills.len(), self.order_events.len());
         self.handle_exec_reports(reports, now_ns);
+        ExecOutcome { fills: self.fills[fills_before..].to_vec(), order_events: self.order_events[events_before..].to_vec() }
     }
 
     /// Records a markout observation for one already-recorded fill, at
@@ -1547,7 +1608,11 @@ impl ExecutionEngine {
         RunIdentity { config_hash: self.run_config.hash(), build_hash: BUILD_HASH }
     }
 
-    pub fn tier1_report(&self) -> Tier1Summary {
+    /// `venue`: `SimExchange`'s own OTR audit counters live outside this
+    /// engine now (dual-clock replay, 2026-08-27) -- borrowed here purely
+    /// to read them into the report, same as every other venue-touching
+    /// method in this file.
+    pub fn tier1_report(&self, venue: &SimExchange) -> Tier1Summary {
         let firm = self.portfolio.firm();
         let mut per_strategy = Vec::new();
         let mut strategy_ids: Vec<StrategyId> = self.portfolio.strategies().copied().collect();
@@ -1606,8 +1671,8 @@ impl ExecutionEngine {
             markout_distribution: MarkoutSummary { per_horizon },
             local_otr_admissions: self.local_otr.admissions,
             local_otr_rejections: self.local_otr.rejections,
-            venue_otr_admissions: self.venue.audit.otr_admissions,
-            venue_otr_rejections: self.venue.audit.otr_rejections,
+            venue_otr_admissions: venue.audit.otr_admissions,
+            venue_otr_rejections: venue.audit.otr_rejections,
             message_counts: self.message_counts.clone(),
             denied_count,
             rejected_count,
@@ -1652,7 +1717,12 @@ mod tests {
         }
     }
 
-    fn engine(instruments: Vec<Instrument>) -> ExecutionEngine {
+    /// Returns `(ExecutionEngine, SimExchange)` now -- `SimExchange`
+    /// moved out to `main.rs`'s own ownership in the real code (dual-
+    /// clock replay, 2026-08-27), so this file's tests construct their
+    /// own the same way, alongside the engine.
+    fn engine(instruments: Vec<Instrument>) -> (ExecutionEngine, SimExchange) {
+        let ids: Vec<InstrumentId> = instruments.iter().map(|i| i.id).collect();
         let run_config = RunConfig {
             session_id: 7,
             cost_config: CostConfig::default(),
@@ -1661,7 +1731,38 @@ mod tests {
             markout_horizons_ns: vec![1_000_000, 5_000_000],
         };
         let venue_otr = OtrConfig { window: std::time::Duration::from_secs(1), max_messages_per_window: 10_000, max_otr_ratio: 1_000_000.0 };
-        ExecutionEngine::new(run_config, instruments, Box::new(AlwaysAllowRms), CostConfig::default(), venue_otr, vec![1_000_000, 5_000_000], true)
+        let venue = SimExchange::new(&ids, venue_otr);
+        let eng = ExecutionEngine::new(run_config, instruments, Box::new(AlwaysAllowRms), CostConfig::default(), vec![1_000_000, 5_000_000], true);
+        (eng, venue)
+    }
+
+    /// Test-only convenience: today's real `Ctx::submit` only ever calls
+    /// `submit_order_local` synchronously, scheduling `deliver_order` for
+    /// later (dual-clock replay, 2026-08-27) -- but most of this file's
+    /// own tests are exercising gate/accounting logic, not the Scheduler-
+    /// driven timing split (that's `main.rs`'s own integration-level
+    /// concern, verified separately). Recombines both phases into one
+    /// synchronous call so the bulk of this test suite didn't need
+    /// rewriting around a timing split it was never testing.
+    fn submit_order_sync(eng: &mut ExecutionEngine, venue: &mut SimExchange, intent: NewOrderIntent, now_ns: u64) -> (GateOutcome, ExecOutcome) {
+        let (outcome, req, mut merged) = eng.submit_order_local(intent, now_ns, venue);
+        if let Some(req) = req {
+            let delivered = eng.deliver_order(req, now_ns, venue);
+            merged.fills.extend(delivered.fills);
+            merged.order_events.extend(delivered.order_events);
+        }
+        (outcome, merged)
+    }
+
+    /// Test-only convenience, same reasoning as `submit_order_sync`:
+    /// recombines `prepare_for_market_event` + `venue.apply_market_event`
+    /// + `apply_venue_reports` (now three separate real calls, split
+    /// across `main.rs`'s Scheduler-driven dispatch) into the one
+    /// synchronous call this file's tests were written against.
+    fn on_market_event_sync(eng: &mut ExecutionEngine, venue: &mut SimExchange, event: &DecodedMessage, now_ns: u64) -> ExecOutcome {
+        eng.prepare_for_market_event(venue);
+        let reports = venue.apply_market_event(event, now_ns);
+        eng.apply_venue_reports(reports, now_ns)
     }
 
     const IID: InstrumentId = InstrumentId(1);
@@ -1711,9 +1812,9 @@ mod tests {
 
     #[test]
     fn tick_size_violation_is_denied_locally_and_never_reaches_the_venue() {
-        let mut eng = engine(vec![future_instrument(1, 10, 100, 1)]);
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 10, 100, 1)]);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(105)), qty: Lots(5) };
-        let (outcome, _) = eng.submit_order(intent, 0);
+        let (outcome, _) = submit_order_sync(&mut eng, &mut venue, intent, 0);
         assert!(matches!(outcome, GateOutcome::Denied { reason: DenyReason::TickSize, .. }));
         assert_eq!(eng.venue_submit_calls(), 0, "a locally-denied order must never call SimExchange::submit");
         let GateOutcome::Denied { client_order_id, .. } = outcome else { unreachable!() };
@@ -1724,9 +1825,9 @@ mod tests {
 
     #[test]
     fn freeze_qty_violation_is_denied_locally_and_never_reaches_the_venue() {
-        let mut eng = engine(vec![future_instrument(1, 10, 50, 1)]);
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 10, 50, 1)]);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(51) };
-        let (outcome, _) = eng.submit_order(intent, 0);
+        let (outcome, _) = submit_order_sync(&mut eng, &mut venue, intent, 0);
         assert!(matches!(outcome, GateOutcome::Denied { reason: DenyReason::FreezeQty, .. }));
         assert_eq!(eng.venue_submit_calls(), 0);
     }
@@ -1741,17 +1842,19 @@ mod tests {
             markout_horizons_ns: vec![],
         };
         let venue_otr = OtrConfig { window: std::time::Duration::from_secs(1), max_messages_per_window: 10_000, max_otr_ratio: 1_000_000.0 };
-        let mut eng = ExecutionEngine::new(run_config, vec![future_instrument(1, 1, 1000, 1)], Box::new(AlwaysAllowRms), CostConfig::default(), venue_otr, vec![], true);
+        let ids_1 = vec![InstrumentId(1)];
+        let mut venue = SimExchange::new(&ids_1, venue_otr);
+        let mut eng = ExecutionEngine::new(run_config, vec![future_instrument(1, 1, 1000, 1)], Box::new(AlwaysAllowRms), CostConfig::default(), vec![], true);
 
         for i in 0..2u64 {
             let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100 + i as i64)), qty: Lots(1) };
-            let (outcome, _) = eng.submit_order(intent, 0);
+            let (outcome, _) = submit_order_sync(&mut eng, &mut venue, intent, 0);
             assert!(matches!(outcome, GateOutcome::Submitted { .. }), "first two messages within the window should be admitted");
         }
         assert_eq!(eng.venue_submit_calls(), 2);
 
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(103)), qty: Lots(1) };
-        let (outcome, _) = eng.submit_order(intent, 0);
+        let (outcome, _) = submit_order_sync(&mut eng, &mut venue, intent, 0);
         assert!(matches!(outcome, GateOutcome::Denied { reason: DenyReason::LocalOtrOrRate, .. }));
         assert_eq!(eng.venue_submit_calls(), 2, "the local governor's rejection must not call the venue at all -- the venue's own OTR governor (D19) is a wholly separate mechanism");
     }
@@ -1760,14 +1863,14 @@ mod tests {
     fn venue_rejection_is_a_genuinely_different_terminal_state_from_denied() {
         // BOC that would cross: passes every local gate, reaches the
         // venue, and *the venue* refuses it -- Rejected, not Denied.
-        let mut eng = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
         // Rest a real sell order first via a market event so the BOC buy would cross.
-        eng.on_market_event(
+        on_market_event_sync(&mut eng, &mut venue, 
             &DecodedMessage::OrderAdd(crate::decoder::OrderAdd { seq: 0, security_id: 1, side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(10), priority_ts: 1, event_time: 0 }),
             0,
         );
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::BookOrCancel(Price(150)), qty: Lots(5) };
-        let (outcome, _) = eng.submit_order(intent, 0);
+        let (outcome, _) = submit_order_sync(&mut eng, &mut venue, intent, 0);
         assert!(matches!(outcome, GateOutcome::Submitted { .. }), "BOC passed every local gate -- it must reach the venue");
         assert_eq!(eng.venue_submit_calls(), 1, "unlike Denied, a venue-bound order DOES call submit");
         let GateOutcome::Submitted { client_order_id } = outcome else { unreachable!() };
@@ -1782,9 +1885,9 @@ mod tests {
 
     #[test]
     fn partial_fill_then_remainder_fill_reaches_filled_via_partially_filled() {
-        let mut eng = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(150)), qty: Lots(10) };
-        let (outcome, _) = eng.submit_order(intent, 0);
+        let (outcome, _) = submit_order_sync(&mut eng, &mut venue, intent, 0);
         let GateOutcome::Submitted { client_order_id } = outcome else { panic!() };
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Accepted);
 
@@ -1793,13 +1896,13 @@ mod tests {
         // quantities are wire-raw (simulator's native scale), scaled by
         // RAW_QTY_PER_LOT from the original 4/6 split against the
         // order's 10-lot (100,000 raw) requested quantity.
-        eng.on_market_event(&DecodedMessage::Trade(crate::decoder::Trade { seq: 0, full: false, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(40_000), event_time: 999 }), 10);
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::Trade(crate::decoder::Trade { seq: 0, full: false, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(40_000), event_time: 999 }), 10);
         let order = eng.order(client_order_id).unwrap();
         assert_eq!(order.state, OrderState::PartiallyFilled);
         assert_eq!(order.filled_qty, Qty(40_000));
         assert_eq!(order.leaves_qty, Qty(60_000));
 
-        eng.on_market_event(&DecodedMessage::Trade(crate::decoder::Trade { seq: 1, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(60_000), event_time: 999 }), 20);
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::Trade(crate::decoder::Trade { seq: 1, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(60_000), event_time: 999 }), 20);
         let order = eng.order(client_order_id).unwrap();
         assert_eq!(order.state, OrderState::Filled);
         assert_eq!(order.leaves_qty, Qty(0));
@@ -1813,16 +1916,16 @@ mod tests {
 
     #[test]
     fn cancel_confirmation_reaches_canceled_through_pending_cancel() {
-        let mut eng = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(10) };
-        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!() };
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Accepted);
 
         assert!(eng.request_cancel(client_order_id, 5).0);
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::PendingCancel);
         assert!(eng.order(client_order_id).unwrap().state.is_open(), "still exposed while the cancel is in flight");
 
-        eng.deliver_cancel_to_venue(client_order_id, 10);
+        eng.deliver_cancel_to_venue(client_order_id, 10, &mut venue);
         let order = eng.order(client_order_id).unwrap();
         assert_eq!(order.state, OrderState::Canceled);
         assert_eq!(order.cancel_reason, Some(CancelReason::Strategy));
@@ -1832,10 +1935,10 @@ mod tests {
 
     #[test]
     fn pending_cancel_to_filled_race_the_fill_wins_not_silently_dropped_or_double_counted() {
-        let mut eng = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
         // 1. Submit a resting order.
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(150)), qty: Lots(10) };
-        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!() };
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Accepted);
 
         // 2. Strategy decides to cancel -- the cancel message is "sent"
@@ -1853,7 +1956,7 @@ mod tests {
         // Trade quantity is wire-raw (simulator's native scale) -- 10
         // lots' worth (RAW_QTY_PER_LOT-scaled), fully consuming the
         // resting order in one shot.
-        eng.on_market_event(
+        on_market_event_sync(&mut eng, &mut venue, 
             &DecodedMessage::Trade(crate::decoder::Trade { seq: 0, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(100_000), event_time: 999_999 }),
             150,
         );
@@ -1871,7 +1974,7 @@ mod tests {
         // returns an empty Vec<ExecReport> for this cancel -- and the
         // order must stay exactly Filled: not regressed to Canceled,
         // not double counted, not lost.
-        eng.deliver_cancel_to_venue(client_order_id, 200);
+        eng.deliver_cancel_to_venue(client_order_id, 200, &mut venue);
         let order = eng.order(client_order_id).unwrap();
         assert_eq!(order.state, OrderState::Filled, "a late, moot cancel response must not overwrite a real fill");
         assert_eq!(order.filled_qty, Qty(100_000), "still exactly one fill's worth -- the moot cancel changed nothing");
@@ -1896,16 +1999,18 @@ mod tests {
         // *its own* governor (D19), giving us a real venue-rejected
         // modify to test against, not a fabricated one.
         let venue_otr = OtrConfig { window: std::time::Duration::from_nanos(1), max_messages_per_window: 1, max_otr_ratio: 1_000_000.0 };
-        let mut eng = ExecutionEngine::new(run_config, vec![future_instrument(1, 1, 1000, 1)], Box::new(AlwaysAllowRms), CostConfig::default(), venue_otr, vec![], true);
+        let ids_1 = vec![InstrumentId(1)];
+        let mut venue = SimExchange::new(&ids_1, venue_otr);
+        let mut eng = ExecutionEngine::new(run_config, vec![future_instrument(1, 1, 1000, 1)], Box::new(AlwaysAllowRms), CostConfig::default(), vec![], true);
 
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(10) };
-        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!() };
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Accepted);
 
         assert!(eng.request_modify(client_order_id, 0).0);
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::PendingUpdate);
 
-        eng.deliver_modify_to_venue(client_order_id, Qty(20), Some(Price(101)), 0);
+        eng.deliver_modify_to_venue(client_order_id, Qty(20), Some(Price(101)), 0, &mut venue);
         let order = eng.order(client_order_id).unwrap();
         assert_eq!(order.state, OrderState::Accepted, "rejected modify -- order keeps working, per STRATEGY-GUIDE.md §7a");
         assert!(!order.state.is_terminal());
@@ -1915,9 +2020,9 @@ mod tests {
 
     #[test]
     fn expire_transitions_an_open_order_to_a_terminal_state() {
-        let mut eng = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(10) };
-        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!() };
         assert!(eng.mark_expired(client_order_id, 100).0);
         let order = eng.order(client_order_id).unwrap();
         assert_eq!(order.state, OrderState::Expired);
@@ -1928,18 +2033,18 @@ mod tests {
 
     #[test]
     fn firm_account_nets_across_strategies_sub_accounts_stay_independent() {
-        let mut eng = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
         // Strategy 1 buys 10 lots (100,000 raw units).
         let i1 = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(10) };
-        let (GateOutcome::Submitted { client_order_id: c1 }, _) = eng.submit_order(i1, 0) else { panic!() };
-        eng.on_market_event(&DecodedMessage::Trade(crate::decoder::Trade { seq: 0, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Buy, price: crate::decoder::Price(100), qty: crate::decoder::Qty(100_000), event_time: 999_999 }), 10);
+        let (GateOutcome::Submitted { client_order_id: c1 }, _) = submit_order_sync(&mut eng, &mut venue, i1, 0) else { panic!() };
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::Trade(crate::decoder::Trade { seq: 0, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Buy, price: crate::decoder::Price(100), qty: crate::decoder::Qty(100_000), event_time: 999_999 }), 10);
         assert_eq!(eng.order(c1).unwrap().state, OrderState::Filled);
 
         // Strategy 2 sells 4 lots (40,000 raw units) of the SAME
         // instrument -- must not appear in strategy 1's own position.
         let i2 = NewOrderIntent { strategy_id: 2, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(101)), qty: Lots(4) };
-        let (GateOutcome::Submitted { client_order_id: c2 }, _) = eng.submit_order(i2, 20) else { panic!() };
-        eng.on_market_event(&DecodedMessage::Trade(crate::decoder::Trade { seq: 1, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(101), qty: crate::decoder::Qty(40_000), event_time: 999_998 }), 30);
+        let (GateOutcome::Submitted { client_order_id: c2 }, _) = submit_order_sync(&mut eng, &mut venue, i2, 20) else { panic!() };
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::Trade(crate::decoder::Trade { seq: 1, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(101), qty: crate::decoder::Qty(40_000), event_time: 999_998 }), 30);
         assert_eq!(eng.order(c2).unwrap().state, OrderState::Filled);
 
         // Position tracking (`Portfolio`/`SubAccount`) is in **lots**, not
@@ -1969,18 +2074,18 @@ mod tests {
         // -30,000 -- neither the right magnitude nor the right factor,
         // which is exactly why this needs a real instrument multiplier
         // in the test, not just qty=1 with multiplier=1.
-        let mut eng = engine(vec![future_instrument(1, 1, 1000, 100)]);
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 100)]);
         let price_of = |rupees: f64| Price((rupees * RAW_PRICE_SCALE) as i64);
 
         let buy = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(price_of(5424.0)), qty: Lots(1) };
-        let (GateOutcome::Submitted { client_order_id: c1 }, _) = eng.submit_order(buy, 0) else { panic!() };
-        eng.on_market_event(&DecodedMessage::Trade(crate::decoder::Trade { seq: 0, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Buy, price: crate::decoder::Price(price_of(5424.0).0), qty: crate::decoder::Qty(10_000), event_time: 1 }), 1);
+        let (GateOutcome::Submitted { client_order_id: c1 }, _) = submit_order_sync(&mut eng, &mut venue, buy, 0) else { panic!() };
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::Trade(crate::decoder::Trade { seq: 0, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Buy, price: crate::decoder::Price(price_of(5424.0).0), qty: crate::decoder::Qty(10_000), event_time: 1 }), 1);
         assert_eq!(eng.order(c1).unwrap().state, OrderState::Filled);
         assert_eq!(eng.portfolio().sub_account(1).unwrap().net_position(IID), 1, "1 lot bought");
 
         let sell = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(price_of(5421.0)), qty: Lots(1) };
-        let (GateOutcome::Submitted { client_order_id: c2 }, _) = eng.submit_order(sell, 2) else { panic!() };
-        eng.on_market_event(&DecodedMessage::Trade(crate::decoder::Trade { seq: 1, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(price_of(5421.0).0), qty: crate::decoder::Qty(10_000), event_time: 3 }), 3);
+        let (GateOutcome::Submitted { client_order_id: c2 }, _) = submit_order_sync(&mut eng, &mut venue, sell, 2) else { panic!() };
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::Trade(crate::decoder::Trade { seq: 1, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(price_of(5421.0).0), qty: crate::decoder::Qty(10_000), event_time: 3 }), 3);
         assert_eq!(eng.order(c2).unwrap().state, OrderState::Filled);
 
         let sub = eng.portfolio().sub_account(1).unwrap();
@@ -2026,7 +2131,7 @@ mod tests {
 
     #[test]
     fn cost_is_queryable_pretrade_and_the_same_function_is_applied_to_the_realised_fill() {
-        let mut eng = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
         let instrument = eng.instrument(IID).unwrap().clone();
         let price = Price(500_000_00_00);
         let qty = Lots(10);
@@ -2035,13 +2140,13 @@ mod tests {
         let pre_trade_cost = eng.cost_model().round_trip(&instrument, qty, price, Side::Sell);
 
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(price), qty };
-        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!() };
         // Real trade quantity in wire-raw units (`qty.to_raw_qty()`) so
         // this trade genuinely fully fills the resting order; `on_fill`
         // converts it back to `Lots` via `Qty::to_lots()` before calling
         // `round_trip` again, so the realised cost below must equal
         // `pre_trade_cost` exactly.
-        eng.on_market_event(&DecodedMessage::Trade(crate::decoder::Trade { seq: 0, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(price.0), qty: crate::decoder::Qty(qty.to_raw_qty().0), event_time: 999_999 }), 10);
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::Trade(crate::decoder::Trade { seq: 0, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(price.0), qty: crate::decoder::Qty(qty.to_raw_qty().0), event_time: 999_999 }), 10);
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Filled);
 
         let realised_fill = &eng.fills()[0];
@@ -2053,8 +2158,8 @@ mod tests {
 
     #[test]
     fn tier1_report_embeds_a_run_identity_and_prints_it() {
-        let eng = engine(vec![future_instrument(1, 1, 1000, 1)]);
-        let report = eng.tier1_report();
+        let (eng, venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let report = eng.tier1_report(&venue);
         assert_eq!(report.run_identity.build_hash, BUILD_HASH);
         let printed = format!("{report}");
         assert!(printed.contains("run identity"));
@@ -2065,19 +2170,19 @@ mod tests {
 
     #[test]
     fn two_engines_built_from_the_identical_run_config_hash_identically() {
-        let eng_a = engine(vec![future_instrument(1, 1, 1000, 1)]);
-        let eng_b = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let (eng_a, _venue_a) = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let (eng_b, _venue_b) = engine(vec![future_instrument(1, 1, 1000, 1)]);
         assert_eq!(eng_a.run_identity().config_hash, eng_b.run_identity().config_hash, "same [run]-shaped config must hash identically -- FR-12's determinism requirement");
     }
 
     #[test]
     fn queue_position_and_markout_fields_exist_on_every_fill_from_creation() {
-        let mut eng = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
         // Rest behind two real resting sell orders so this fill is
         // genuinely passive with a non-trivial queue position.
-        eng.on_market_event(&DecodedMessage::OrderAdd(crate::decoder::OrderAdd { seq: 0, security_id: 1, side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(10), priority_ts: 1, event_time: 0 }), 0);
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::OrderAdd(crate::decoder::OrderAdd { seq: 0, security_id: 1, side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(10), priority_ts: 1, event_time: 0 }), 0);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(150)), qty: Lots(5) };
-        let (GateOutcome::Submitted { client_order_id }, _) = eng.submit_order(intent, 0) else { panic!() };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!() };
         assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Accepted);
 
         // Real trade consumes the resting order ahead of us (raw qty 10,
@@ -2085,8 +2190,8 @@ mod tests {
         // Passive fill with a genuine pre-fill queue position of 10. The
         // second trade's quantity is wire-raw, equal to our own order's
         // requested raw quantity (5 lots), so it fully fills us.
-        eng.on_market_event(&DecodedMessage::Trade(crate::decoder::Trade { seq: 1, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(10), event_time: 1 }), 5);
-        eng.on_market_event(&DecodedMessage::Trade(crate::decoder::Trade { seq: 2, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(intent.qty.to_raw_qty().0), event_time: 999_999 }), 6);
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::Trade(crate::decoder::Trade { seq: 1, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(10), event_time: 1 }), 5);
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::Trade(crate::decoder::Trade { seq: 2, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(intent.qty.to_raw_qty().0), event_time: 999_999 }), 6);
 
         assert_eq!(eng.fills().len(), 1);
         let fill = &eng.fills()[0];

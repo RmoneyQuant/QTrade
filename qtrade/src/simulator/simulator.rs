@@ -960,6 +960,21 @@ fn register_resting(
 /// `apply_market_event` (the independent real feed), both returning
 /// `Vec<ExecReport>` (reports out) -- indistinguishable in shape from
 /// what a live gateway would hand the ExecutionEngine.
+/// One of our own messages (submit/cancel/modify), sitting "in flight"
+/// between `ExecutionEngine` handing it to `SimExchange` and the
+/// matching engine actually seeing it -- `outbound_ns` later (2026-08-27,
+/// "the delay belongs to the venue, not the orchestration around it";
+/// split into outbound/inbound legs the same day, second revision --
+/// see `SimExchange`'s own field doc comments). A real market event
+/// (`apply_market_event`) never goes through this: only our own commands
+/// experience this transit delay, since a real tick is data arriving,
+/// not a message we sent.
+enum PendingArrival {
+    Submit(NewOrderRequest),
+    Cancel(u64),
+    Modify(u64, Qty, Option<Price>),
+}
+
 pub struct SimExchange {
     books: HashMap<InstrumentId, SimBookImpl>,
     resting: HashMap<u64, RestingSimOrder>,
@@ -972,6 +987,38 @@ pub struct SimExchange {
     /// O(genuine transitions) rather than O(events x resting orders).
     last_qty_ahead: HashMap<u64, i64>,
     pub audit: AuditLog,
+    /// How long one of our own messages takes to physically reach this
+    /// venue's matching engine (2026-08-27; split from one combined
+    /// round-trip number into real outbound/inbound legs the same day,
+    /// on real feedback: matching should happen the instant the order
+    /// genuinely arrives, not after the full round trip). 0 by default --
+    /// every existing test, and any caller that never opts in, keeps
+    /// today's instant-match behaviour exactly. Real measured MCX
+    /// round trip as of 2026-08-27 is ~500,000ns; with no measured
+    /// asymmetry yet, `main.rs` splits it 250,000/250,000 via
+    /// `with_order_latency`. `simulator::Fixed`/`Sampled` (already built,
+    /// FR-B20, same `outbound()`/`inbound()` shape) are the later,
+    /// properly-wired and probabilistic upgrade this pair of plain `u64`s
+    /// stands in for today.
+    outbound_ns: u64,
+    /// How long the matching engine's own answer takes to travel back to
+    /// us, *after* a message has already been matched (see `outbound_ns`).
+    /// A report sits in `awaiting_visibility` for exactly this long before
+    /// `drain_due` will ever return it.
+    inbound_ns: u64,
+    /// Our own messages that have been sent but haven't yet reached the
+    /// matching engine -- see `PendingArrival`'s own doc comment. A plain
+    /// `Vec`, not a timestamp-keyed map: real order volume per run is
+    /// tens to low hundreds, never the millions `books`/`resting` scale
+    /// to, so a linear scan-and-drain on every call is genuinely cheaper
+    /// than a tree's bookkeeping, not a shortcut taken for lack of one.
+    in_transit: Vec<(i64, PendingArrival)>,
+    /// Real matches already produced, held back until `inbound_ns` after
+    /// their own match time -- the second stage `drain_due` splits out
+    /// specifically so "the order arrived and was matched" and "we found
+    /// out about it" are two genuinely different simulated instants, not
+    /// one combined delay applied all on one side.
+    awaiting_visibility: Vec<(i64, Vec<ExecReport>)>,
 }
 
 impl SimExchange {
@@ -988,7 +1035,129 @@ impl SimExchange {
             otr: OtrGovernor::new(otr_cfg),
             last_qty_ahead: HashMap::new(),
             audit: AuditLog::default(),
+            outbound_ns: 0,
+            inbound_ns: 0,
+            in_transit: Vec::new(),
+            awaiting_visibility: Vec::new(),
         }
+    }
+
+    /// Opts into a real order-entry delay, split into its two real legs
+    /// -- builder-style so every existing call site (every test in this
+    /// file, `execution.rs`'s own tests, `execution-validate`) keeps
+    /// constructing a zero-latency `SimExchange` unchanged, and only
+    /// `main.rs`'s real run has to ask for the real numbers explicitly.
+    pub fn with_order_latency(mut self, outbound_ns: u64, inbound_ns: u64) -> Self {
+        self.outbound_ns = outbound_ns;
+        self.inbound_ns = inbound_ns;
+        self
+    }
+
+    /// Releases whatever has come due as of `now_ns`, in two stages:
+    /// **(1)** anything in `in_transit` whose `outbound_ns` has elapsed
+    /// gets matched *right now*, against the book *as it stands* -- "our
+    /// book gets more delayed" in exactly the sense a real wire delay
+    /// would: whatever real market activity happened in the meantime
+    /// already landed first. Its result does **not** return from this
+    /// call -- it moves into `awaiting_visibility`, `inbound_ns` further
+    /// out, since the order having been matched and us finding out about
+    /// it are two different simulated instants. **(2)** anything in
+    /// `awaiting_visibility` whose `inbound_ns` has also elapsed is what
+    /// actually returns. Called at the top of every public method here
+    /// (`submit`/`cancel`/`modify`/`apply_market_event`/`poll`) -- any of
+    /// them handing this venue a fresh `now_ns` is a legitimate moment to
+    /// check both stages, not just the specific message that call is
+    /// about. `poll` exists specifically so this check can also happen
+    /// with *no* new message at all, driven by `main.rs`'s own alarm (see
+    /// `next_due_ns`) -- a real exchange answers at its own processing
+    /// time regardless of whether anything else happens to occur then,
+    /// and this venue needs the same property, not just "whenever
+    /// something else next calls in."
+    fn drain_due(&mut self, now_ns: i64) -> Vec<ExecReport> {
+        if !self.in_transit.is_empty() {
+            let (still_in_transit, mut arrived): (Vec<_>, Vec<_>) = std::mem::take(&mut self.in_transit).into_iter().partition(|(due, _)| *due > now_ns);
+            self.in_transit = still_in_transit;
+            // Arrival order, not insertion order -- two messages queued
+            // out of order (a modify sent after a submit, but arriving
+            // first due to a faster path) would be unrealistic to replay
+            // in send order.
+            arrived.sort_by_key(|(due, _)| *due);
+            for (due, op) in arrived {
+                let match_ns = due as u64;
+                let matched = match op {
+                    PendingArrival::Submit(req) => self.submit_now(req, match_ns),
+                    PendingArrival::Cancel(id) => self.cancel_now(id, match_ns),
+                    PendingArrival::Modify(id, qty, price) => self.modify_now(id, qty, price, match_ns),
+                };
+                if !matched.is_empty() {
+                    self.awaiting_visibility.push((due + self.inbound_ns as i64, matched));
+                }
+            }
+        }
+
+        let mut reports = Vec::new();
+        if !self.awaiting_visibility.is_empty() {
+            let (still_hidden, mut visible): (Vec<_>, Vec<_>) = std::mem::take(&mut self.awaiting_visibility).into_iter().partition(|(due, _)| *due > now_ns);
+            self.awaiting_visibility = still_hidden;
+            visible.sort_by_key(|(due, _)| *due);
+            for (_, batch) in visible {
+                reports.extend(batch);
+            }
+        }
+        reports
+    }
+
+    /// The earliest simulated instant this venue needs to be checked
+    /// again for either stage, even if nothing else ever calls it -- see
+    /// `next_arrival_due_ns`/`next_visibility_due_ns`'s own doc comments
+    /// for the real reason this exists. Combines both since a caller that
+    /// only wants "is anything pending at all" doesn't need to know which
+    /// stage.
+    pub fn next_due_ns(&self) -> Option<i64> {
+        match (self.next_arrival_due_ns(), self.next_visibility_due_ns()) {
+            (Some(a), Some(v)) => Some(a.min(v)),
+            (Some(a), None) => Some(a),
+            (None, Some(v)) => Some(v),
+            (None, None) => None,
+        }
+    }
+
+    /// The earliest instant something in `in_transit` reaches the
+    /// matching engine -- `main.rs`'s own alarm (2026-08-27) schedules an
+    /// `EventClass::OrderArrival` wake-up here, so a quiet market can
+    /// never leave one of our own orders unmatched past its real
+    /// `outbound_ns`. A real exchange always answers at its own
+    /// processing time; before this existed, `drain_due` only ever ran
+    /// when *something else* happened to hand this venue a fresh
+    /// `now_ns`, which is not the same guarantee.
+    pub fn next_arrival_due_ns(&self) -> Option<i64> {
+        self.in_transit.iter().map(|(due, _)| *due).min()
+    }
+
+    /// The earliest instant an already-matched report becomes visible --
+    /// `main.rs` schedules an `EventClass::ReportDelivery` wake-up here,
+    /// same reasoning as `next_arrival_due_ns`, for the inbound leg.
+    pub fn next_visibility_due_ns(&self) -> Option<i64> {
+        self.awaiting_visibility.iter().map(|(due, _)| *due).min()
+    }
+
+    /// Cheap fast-path check for `main.rs`'s own `sync_venue_alarms` --
+    /// called after *every* dispatched event (hundreds of millions of
+    /// times for a real day's market data), so avoiding even the two
+    /// `next_*_due_ns` scans in the overwhelming common case (no order in
+    /// flight at all -- real order volume is tens per run) is worth a
+    /// dedicated method rather than relying on `sync_venue_alarms` to
+    /// short-circuit some other way.
+    pub fn has_pending(&self) -> bool {
+        !self.in_transit.is_empty() || !self.awaiting_visibility.is_empty()
+    }
+
+    /// The alarm's own payload -- just runs `drain_due` with no new
+    /// message of our own attached. Called by `main.rs` when a scheduled
+    /// wake-up (not a real market event) fires; whatever's due releases,
+    /// whatever isn't stays queued exactly as it was.
+    pub fn poll(&mut self, now_ns: u64) -> Vec<ExecReport> {
+        self.drain_due(now_ns as i64)
     }
 
     /// Records a qty-ahead observation for `sim_id` iff it changed since
@@ -1080,7 +1249,26 @@ impl SimExchange {
     /// FR-B22. Submits one new order; returns every `ExecReport` this
     /// call produces (rejection, fills from an immediate sweep, and/or a
     /// resting report for whatever residual remains).
+    ///
+    /// **Public entry point** (2026-08-27): drains anything already due
+    /// first (see `drain_due`'s own doc comment), then either matches
+    /// `req` immediately (`outbound_ns == inbound_ns == 0`, every
+    /// existing test's own default) or stashes it to be matched
+    /// `outbound_ns` later, with the resulting report held a further
+    /// `inbound_ns` after that -- `ExecutionEngine`/`Ctx` call this the
+    /// instant gates pass, with no awareness of whether the venue answers
+    /// now or later.
     pub fn submit(&mut self, req: NewOrderRequest, now_ns: u64) -> Vec<ExecReport> {
+        let mut reports = self.drain_due(now_ns as i64);
+        if self.outbound_ns == 0 && self.inbound_ns == 0 {
+            reports.extend(self.submit_now(req, now_ns));
+        } else {
+            self.in_transit.push((now_ns as i64 + self.outbound_ns as i64, PendingArrival::Submit(req)));
+        }
+        reports
+    }
+
+    fn submit_now(&mut self, req: NewOrderRequest, now_ns: u64) -> Vec<ExecReport> {
         let mut reports = Vec::new();
 
         if !self.books.contains_key(&req.instrument) {
@@ -1178,7 +1366,23 @@ impl SimExchange {
         reports
     }
 
+    /// Public entry point (2026-08-27) -- same drain-then-immediate-or-
+    /// stash shape as `submit`. A cancel targeting an order that's still
+    /// itself sitting unmatched in `in_transit` (never yet resting) is a
+    /// legitimate no-op here, same as it always was for an order that was
+    /// never resting to begin with -- `cancel_now` simply finds nothing
+    /// in `self.resting` and returns empty.
     pub fn cancel(&mut self, client_order_id: u64, now_ns: u64) -> Vec<ExecReport> {
+        let mut reports = self.drain_due(now_ns as i64);
+        if self.outbound_ns == 0 && self.inbound_ns == 0 {
+            reports.extend(self.cancel_now(client_order_id, now_ns));
+        } else {
+            self.in_transit.push((now_ns as i64 + self.outbound_ns as i64, PendingArrival::Cancel(client_order_id)));
+        }
+        reports
+    }
+
+    fn cancel_now(&mut self, client_order_id: u64, now_ns: u64) -> Vec<ExecReport> {
         let mut reports = Vec::new();
         if let Some(rec) = self.resting.remove(&client_order_id) {
             self.resting_by_sim.remove(&rec.sim_id);
@@ -1197,7 +1401,18 @@ impl SimExchange {
     /// of the (possibly new) price level, exactly the rule independently
     /// confirmed against `references/MCX_Feeder.cpp`'s 13101 handler for
     /// real orders above.
+    /// Public entry point (2026-08-27) -- same shape as `submit`/`cancel`.
     pub fn modify(&mut self, client_order_id: u64, new_qty: Qty, new_price: Option<Price>, now_ns: u64) -> Vec<ExecReport> {
+        let mut reports = self.drain_due(now_ns as i64);
+        if self.outbound_ns == 0 && self.inbound_ns == 0 {
+            reports.extend(self.modify_now(client_order_id, new_qty, new_price, now_ns));
+        } else {
+            self.in_transit.push((now_ns as i64 + self.outbound_ns as i64, PendingArrival::Modify(client_order_id, new_qty, new_price)));
+        }
+        reports
+    }
+
+    fn modify_now(&mut self, client_order_id: u64, new_qty: Qty, new_price: Option<Price>, now_ns: u64) -> Vec<ExecReport> {
         let mut reports = Vec::new();
         let Some(rec) = self.resting.get(&client_order_id).copied() else { return reports };
         // D19: the same governor gates modify as gates a new order --
@@ -1255,7 +1470,21 @@ impl SimExchange {
     /// from a real `OrderMassDelete` sweeping them away. This is the
     /// **entire** real-market-data path; it never reads anything from
     /// `crate::cache` or `crate::book` (D10/FR-B19).
+    /// Public entry point (2026-08-27): drains anything already due
+    /// first -- a real market tick is exactly the kind of "the venue was
+    /// just given a fresh `now_ns`" moment that should also flush any of
+    /// our own messages whose transit or visibility time has since
+    /// elapsed, even if nothing new is being submitted right now. The
+    /// real market event itself is never delayed -- only our own
+    /// messages experience `outbound_ns`/`inbound_ns`; a tick is data
+    /// arriving, not something we sent.
     pub fn apply_market_event(&mut self, event: &decoder::DecodedMessage, now_ns: u64) -> Vec<ExecReport> {
+        let mut reports = self.drain_due(now_ns as i64);
+        reports.extend(self.apply_market_event_now(event, now_ns));
+        reports
+    }
+
+    fn apply_market_event_now(&mut self, event: &decoder::DecodedMessage, now_ns: u64) -> Vec<ExecReport> {
         let mut reports = Vec::new();
         let Some(sid) = security_id_of(event) else { return reports };
         let id = InstrumentId(sid as u32);
@@ -1712,6 +1941,108 @@ mod tests {
             sim_qty <= wrongly_reported_real_qty,
             "FR-B24 invariant #1 violated: simulated passive fills ({sim_qty}) exceeded real trade quantity ({wrongly_reported_real_qty})"
         );
+    }
+
+    // ---- Order-entry latency, owned by the venue (2026-08-27, split
+    // ---- into outbound/inbound legs + a real alarm, same day) ----
+    //
+    // "Send as fast as possible; the delay belongs to the venue, not the
+    // orchestration around it" -- `ExecutionEngine`/`Ctx` never know
+    // whether `submit`/`cancel`/`modify` answers now or later; only
+    // `SimExchange` itself does, via `with_order_latency`. Real feedback
+    // sharpened this twice the same day: (1) matching should happen the
+    // instant the order genuinely arrives (`outbound_ns`), with the
+    // *report* held back a further `inbound_ns` -- not one combined delay
+    // applied all on one side; (2) a real exchange answers at its own
+    // processing time regardless of whether anything else happens to
+    // occur then, so `next_due_ns`/`poll` exist specifically so a quiet
+    // market can't leave an order unresolved past its real due time.
+
+    #[test]
+    fn zero_latency_matches_immediately_exactly_as_every_other_test_in_this_file_assumes() {
+        let mut ex = exch(); // with_order_latency never called -- both legs default to 0
+        let reports = ex.submit(NewOrderRequest { client_order_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(150)), qty: Qty(5) }, 0);
+        assert!(matches!(reports[0], ExecReport::Resting { .. }), "zero latency must resolve in the same call, unchanged from every pre-2026-08-27 test");
+    }
+
+    #[test]
+    fn outbound_leg_defers_the_match_itself_inbound_leg_further_defers_seeing_its_report() {
+        let mut ex = exch().with_order_latency(100, 40); // outbound=100, inbound=40
+        let reports = ex.submit(NewOrderRequest { client_order_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(150)), qty: Qty(5) }, 0);
+        assert!(reports.is_empty(), "the just-submitted order's own report must not appear before outbound_ns has elapsed");
+
+        // t=100: outbound has elapsed -- the order is matched *now*
+        // (against the book as it stands), but its report doesn't
+        // surface yet: inbound_ns is still owed.
+        let match_time_reports = ex.apply_market_event(&add(DSide::Sell, 200, 1, 99), 100);
+        assert!(match_time_reports.is_empty(), "matched at t=100, but the report isn't visible until t=140 (inbound_ns later)");
+
+        // t=130: still before the report becomes visible (140).
+        let too_early = ex.apply_market_event(&add(DSide::Sell, 201, 1, 98), 130);
+        assert!(too_early.is_empty(), "t=130 is still before the report's t=140 visibility");
+
+        // t=140: inbound has now also elapsed -- the report (matched back
+        // at t=100, against whatever the book was then) finally surfaces.
+        let visible = ex.apply_market_event(&add(DSide::Sell, 202, 1, 97), 140);
+        assert!(visible.iter().any(|r| matches!(r, ExecReport::Resting { client_order_id: 1, .. })), "the matched-but-hidden report must surface once inbound_ns has also elapsed: {visible:?}");
+    }
+
+    #[test]
+    fn pending_arrival_matches_against_the_book_as_it_stands_on_arrival_not_as_it_stood_when_sent() {
+        let mut ex = exch().with_order_latency(100, 0); // inbound=0: isolate the match-timing effect
+        // At t=0, the book is empty -- if this Buy matched right now, it
+        // would simply rest at 150 (nothing to sweep).
+        let reports = ex.submit(NewOrderRequest { client_order_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(150)), qty: Qty(5) }, 0);
+        assert!(reports.is_empty());
+
+        // Before our order arrives, a real Sell rests at 140 -- a price
+        // our Buy(150) would genuinely cross.
+        ex.apply_market_event(&add(DSide::Sell, 140, 10, 1), 50);
+
+        // At t=100 (outbound_ns), our order finally reaches the matching
+        // engine -- and sees the book *as it now stands*, not as it stood
+        // at t=0. This is the real effect a physical transit delay has:
+        // "our book gets more delayed," exactly as intended, not merely a
+        // notification delay bolted on after an instant match.
+        let due_reports = ex.apply_market_event(&add(DSide::Sell, 999, 1, 2), 100);
+        assert!(
+            due_reports.iter().any(|r| matches!(r, ExecReport::Filled { client_order_id: 1, kind: FillKind::Aggressive, .. })),
+            "arriving after the real Sell@140 posted, our Buy(150) must cross it -- got {due_reports:?}"
+        );
+    }
+
+    #[test]
+    fn next_due_ns_and_poll_resolve_an_order_even_when_no_real_market_event_ever_arrives() {
+        let mut ex = exch().with_order_latency(100, 40);
+        ex.submit(NewOrderRequest { client_order_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(150)), qty: Qty(5) }, 0);
+        // Matches at t=100, visible at t=140 -- `next_due_ns` must report
+        // the *earlier* of the two pending due times (the match, not the
+        // eventual visibility) until that first stage actually fires.
+        assert_eq!(ex.next_due_ns(), Some(100), "next_due_ns must report the match's own due time first, not the later visibility time");
+
+        // A quiet market: nothing ever calls apply_market_event. Without
+        // `poll`, this order would sit unresolved forever -- exactly the
+        // real gap identified in review. `main.rs`'s own alarm would call
+        // `poll` here, driven by the Scheduler, not by a real tick.
+        let at_match_time = ex.poll(100);
+        assert!(at_match_time.is_empty(), "matched internally at t=100, but still not visible (inbound_ns=40 not yet elapsed)");
+        assert_eq!(ex.next_due_ns(), Some(140), "next_due_ns must now point at the visibility time, the match having already happened");
+
+        let at_visible_time = ex.poll(140);
+        assert!(at_visible_time.iter().any(|r| matches!(r, ExecReport::Resting { client_order_id: 1, .. })), "poll alone, with no real market event ever occurring, must still resolve the order once it's actually due: {at_visible_time:?}");
+        assert_eq!(ex.next_due_ns(), None, "nothing left pending once the order has fully resolved");
+    }
+
+    #[test]
+    fn cancel_of_a_still_pending_submit_is_a_safe_no_op() {
+        let mut ex = exch().with_order_latency(100, 0);
+        ex.submit(NewOrderRequest { client_order_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(150)), qty: Qty(5) }, 0);
+        // Order 1 is still in flight, not yet resting -- a cancel aimed
+        // at it finds nothing in `self.resting` (same as cancelling an
+        // order that never existed) and must not panic or fabricate a
+        // report.
+        let cancel_reports = ex.cancel(1, 10);
+        assert!(cancel_reports.is_empty(), "cancelling a still-in-flight order is a safe no-op, same as cancelling an unknown order");
     }
 }
 
