@@ -118,6 +118,108 @@ impl RecordSource {
     }
 }
 
+/// Peeks an outer record's own starting `exchange_ts` from the leading
+/// `PacketHeader` (template 13003, `TransactTime` at body offset 24 --
+/// matches `decoder::decode_message`'s own `13003 => transact_time:
+/// u64_le(m, 24)`) without a full decode. `last` carries the running
+/// per-stream value forward for the (empirically never-seen, but
+/// defended) case of a record with no leading PacketHeader, exactly
+/// mirroring `replay`'s own inner-loop `exchange_ts` tracking -- so a
+/// single-stream merge yields values byte-identical to the pre-merge
+/// code.
+fn peek_exchange_ts(payload: &[u8], last: &mut u64) -> u64 {
+    if payload.len() >= 8 {
+        let body_len = u16::from_le_bytes([payload[0], payload[1]]) as usize;
+        let template_id = u16::from_le_bytes([payload[2], payload[3]]);
+        if template_id == 13003 && body_len >= 32 && payload.len() >= 32 {
+            *last = u64::from_le_bytes(payload[24..32].try_into().unwrap());
+        }
+    }
+    *last
+}
+
+/// One stream's buffered head, plus the bookkeeping the merge needs.
+/// `head_payload` and the caller's decode buffer swap back and forth
+/// every `next()` (no per-record allocation after warmup, same
+/// bounded-memory property as a single `RecordSource`).
+struct MergeSlot {
+    source: RecordSource,
+    source_id: usize,
+    last_exchange_ts: u64,
+    head_payload: Vec<u8>,
+    head_recorder_ts: i64,
+    head_exchange_ts: u64,
+    exhausted: bool,
+}
+
+/// K-way merge of N `RecordSource`s into one totally-ordered stream,
+/// keyed on each outer record's own starting `exchange_ts`
+/// (`PacketHeader.TransactTime`), tie-broken on `source_id` (the order
+/// paths appear in the config). `exchange_ts` is monotonic non-decreasing
+/// within one MCX stream, so the merged sequence is monotonic
+/// non-decreasing too -- which is exactly the invariant `main.rs`'s
+/// lookahead-drain already assumes, so it needs no change for N > 1.
+/// The `(exchange_ts, source_id)` key is pure data, never thread/IO
+/// timing, so a merge is fully reproducible (NFR-01).
+///
+/// N == 1 degrades to a plain one-record read-ahead over the single
+/// source: same record order, same `(recorder_ts, exchange_ts)` values,
+/// byte-identical `on_event` sequence as the pre-merge code.
+struct MergeSource {
+    slots: Vec<MergeSlot>,
+}
+
+impl MergeSource {
+    fn open(paths: &[String]) -> io::Result<Self> {
+        let mut slots = Vec::with_capacity(paths.len());
+        for (source_id, path) in paths.iter().enumerate() {
+            let mut slot = MergeSlot {
+                source: RecordSource::open(path)?,
+                source_id,
+                last_exchange_ts: 0,
+                head_payload: Vec::new(),
+                head_recorder_ts: 0,
+                head_exchange_ts: 0,
+                exhausted: false,
+            };
+            Self::refill(&mut slot)?;
+            slots.push(slot);
+        }
+        Ok(MergeSource { slots })
+    }
+
+    fn refill(slot: &mut MergeSlot) -> io::Result<()> {
+        match slot.source.next_record(&mut slot.head_payload)? {
+            Some(ts) => {
+                slot.head_recorder_ts = ts;
+                slot.head_exchange_ts = peek_exchange_ts(&slot.head_payload, &mut slot.last_exchange_ts);
+            }
+            None => slot.exhausted = true,
+        }
+        Ok(())
+    }
+
+    /// Yields the next outer record in merged order, swapping its payload
+    /// into `out`. Returns `(recorder_ts, exchange_ts)` -- the same pair
+    /// `RecordSource::next_record` + `peek_exchange_ts` would have given
+    /// for that record read alone. `None` once every source is drained.
+    fn next(&mut self, out: &mut Vec<u8>) -> io::Result<Option<(i64, u64)>> {
+        let pick = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.exhausted)
+            .min_by_key(|(_, s)| (s.head_exchange_ts, s.source_id))
+            .map(|(i, _)| i);
+        let Some(i) = pick else { return Ok(None) };
+        let slot = &mut self.slots[i];
+        std::mem::swap(out, &mut slot.head_payload);
+        let yielded = (slot.head_recorder_ts, slot.head_exchange_ts);
+        Self::refill(slot)?;
+        Ok(Some(yielded))
+    }
+}
+
 /// Streams a full real snapshot file (the whole thing, not a bounded
 /// prefix -- a mid-session revision can arrive anywhere, per real
 /// evidence already found for NATURALGAS on `19_01_2026`, which revised
@@ -225,24 +327,29 @@ pub struct ReplayStats {
     pub elapsed: Duration,
 }
 
-/// Streams `capture_path` record-by-record, decoding every message and
+/// Streams `capture_paths` record-by-record, decoding every message and
 /// invoking `on_event` for each one -- the entire outer `[len][ts]
 /// [payload]` / inner `[body_len][template_id][seq]` framing and
 /// `decoder::decode_message` dispatch lives here, so a caller (the
 /// backtest orchestrator) only ever sees already-decoded events, never
 /// raw bytes. `max_outer_records == 0` means no limit -- stream the
-/// whole file, start to end.
-pub fn replay(capture_path: &str, max_outer_records: u64, mut on_event: impl FnMut(ReplayEvent)) -> io::Result<ReplayStats> {
-    let mut source = RecordSource::open(capture_path)?;
+/// whole thing, start to end.
+///
+/// One path is the common case. Two-plus paths are k-way merged on each
+/// outer record's own `exchange_ts` (tie-broken on the path's index) --
+/// for a strategy whose instruments live on different MCX stream files
+/// the same trading day. With one path this is byte-identical to the
+/// pre-merge single-source loop.
+pub fn replay(capture_paths: &[String], max_outer_records: u64, mut on_event: impl FnMut(ReplayEvent)) -> io::Result<ReplayStats> {
+    let mut source = MergeSource::open(capture_paths)?;
     let started = Instant::now();
     let mut events = 0u64;
     let mut outer_records = 0u64;
-    let mut exchange_ts: u64 = 0;
     let mut payload = Vec::new();
 
     loop {
-        let recorder_ts = match source.next_record(&mut payload) {
-            Ok(Some(ts)) => ts,
+        let (recorder_ts, base_exchange_ts) = match source.next(&mut payload) {
+            Ok(Some(pair)) => pair,
             Ok(None) => break,
             // A read error partway through a real multi-GB file is
             // treated as a soft stop, not a hard failure: whatever
@@ -260,6 +367,15 @@ pub fn replay(capture_path: &str, max_outer_records: u64, mut on_event: impl FnM
         if outer_records % 5_000_000 == 0 {
             eprintln!("  ... {outer_records} outer records, {events} messages, {:.1}s elapsed", started.elapsed().as_secs_f64());
         }
+
+        // Reset per record to the merge's authoritative base (the record's
+        // own first `PacketHeader`, or the carried-forward per-stream
+        // value for a headerless one). A mid-payload `PacketHeader` can
+        // still bump this *up* below, exactly as the pre-merge code did;
+        // it just never carries across records here -- the merge owns
+        // that, so a headerless record can't inherit a different stream's
+        // timestamp and break the monotonic ordering.
+        let mut exchange_ts = base_exchange_ts;
 
         let mut off = 0usize;
         while off + 8 <= payload.len() {
@@ -286,4 +402,118 @@ pub fn replay(capture_path: &str, max_outer_records: u64, mut on_event: impl FnM
     }
 
     Ok(ReplayStats { outer_records, events, elapsed: started.elapsed() })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// Writes a minimal-but-real capture file: each outer record is
+    /// `[len:u64 LE][recorder_ts:i64 LE][32-byte payload]`, the payload a
+    /// single `PacketHeader` (template 13003) with `transact_time` at
+    /// body offset 24 -- exactly the bytes `peek_exchange_ts` /
+    /// `decoder::decode_message`'s `13003` arm read.
+    fn write_capture(path: &std::path::Path, records: &[(i64, u64)]) {
+        let mut f = File::create(path).unwrap();
+        for &(recorder_ts, exchange_ts) in records {
+            let mut msg = [0u8; 32];
+            msg[0..2].copy_from_slice(&32u16.to_le_bytes()); // body_len
+            msg[2..4].copy_from_slice(&13003u16.to_le_bytes()); // template_id
+            msg[4..8].copy_from_slice(&7u32.to_le_bytes()); // seq (arbitrary)
+            msg[24..32].copy_from_slice(&exchange_ts.to_le_bytes()); // transact_time
+            let length = (8 + msg.len()) as u64;
+            f.write_all(&length.to_le_bytes()).unwrap();
+            f.write_all(&recorder_ts.to_le_bytes()).unwrap();
+            f.write_all(&msg).unwrap();
+        }
+        f.flush().unwrap();
+    }
+
+    fn drain(paths: &[String]) -> Vec<(i64, u64)> {
+        let mut src = MergeSource::open(paths).unwrap();
+        let mut buf = Vec::new();
+        let mut out = Vec::new();
+        while let Some(pair) = src.next(&mut buf).unwrap() {
+            out.push(pair);
+        }
+        out
+    }
+
+    #[test]
+    fn one_source_is_a_plain_passthrough_in_file_order() {
+        let dir = std::env::temp_dir();
+        let p = dir.join("qtrade_merge_test_single.bin");
+        // exchange_ts deliberately increasing, recorder_ts = exchange_ts + a latency
+        write_capture(&p, &[(105, 100), (112, 108), (150, 145)]);
+        let got = drain(&[p.to_str().unwrap().to_string()]);
+        assert_eq!(got, vec![(105, 100), (112, 108), (150, 145)]);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn two_sources_merge_in_exchange_ts_order() {
+        let dir = std::env::temp_dir();
+        let a = dir.join("qtrade_merge_test_a.bin");
+        let b = dir.join("qtrade_merge_test_b.bin");
+        // Each stream is internally monotonic on exchange_ts; interleaved
+        // they must come out globally monotonic on exchange_ts.
+        write_capture(&a, &[(101, 100), (121, 120), (141, 140)]);
+        write_capture(&b, &[(111, 110), (131, 130), (151, 150)]);
+        let got = drain(&[a.to_str().unwrap().to_string(), b.to_str().unwrap().to_string()]);
+        let exchange_order: Vec<u64> = got.iter().map(|(_, e)| *e).collect();
+        assert_eq!(exchange_order, vec![100, 110, 120, 130, 140, 150]);
+        // and the recorder_ts came along with its own record, not reordered
+        assert_eq!(got, vec![(101, 100), (111, 110), (121, 120), (131, 130), (141, 140), (151, 150)]);
+        let _ = std::fs::remove_file(&a);
+        let _ = std::fs::remove_file(&b);
+    }
+
+    #[test]
+    fn exact_exchange_ts_tie_breaks_on_path_index_deterministically() {
+        let dir = std::env::temp_dir();
+        let a = dir.join("qtrade_merge_test_tie_a.bin");
+        let b = dir.join("qtrade_merge_test_tie_b.bin");
+        write_capture(&a, &[(200, 100), (210, 100)]); // two records, same exchange_ts
+        write_capture(&b, &[(205, 100)]); // one record, same exchange_ts
+        // path[0] (a) wins every tie, so a's two records come before b's one.
+        let got = drain(&[a.to_str().unwrap().to_string(), b.to_str().unwrap().to_string()]);
+        assert_eq!(got, vec![(200, 100), (210, 100), (205, 100)]);
+        // reversed order -> b wins the tie -> b's record first
+        let got_rev = drain(&[b.to_str().unwrap().to_string(), a.to_str().unwrap().to_string()]);
+        assert_eq!(got_rev, vec![(205, 100), (200, 100), (210, 100)]);
+        let _ = std::fs::remove_file(&a);
+        let _ = std::fs::remove_file(&b);
+    }
+
+    #[test]
+    fn one_source_ending_early_does_not_stall_the_other() {
+        let dir = std::env::temp_dir();
+        let a = dir.join("qtrade_merge_test_short_a.bin");
+        let b = dir.join("qtrade_merge_test_short_b.bin");
+        write_capture(&a, &[(101, 100)]); // ends after one
+        write_capture(&b, &[(111, 110), (121, 120), (131, 130)]);
+        let got = drain(&[a.to_str().unwrap().to_string(), b.to_str().unwrap().to_string()]);
+        assert_eq!(got, vec![(101, 100), (111, 110), (121, 120), (131, 130)]);
+        let _ = std::fs::remove_file(&a);
+        let _ = std::fs::remove_file(&b);
+    }
+
+    #[test]
+    fn merged_replay_emits_events_in_nondecreasing_exchange_ts() {
+        let dir = std::env::temp_dir();
+        let a = dir.join("qtrade_merge_test_replay_a.bin");
+        let b = dir.join("qtrade_merge_test_replay_b.bin");
+        write_capture(&a, &[(101, 100), (161, 160), (181, 180)]);
+        write_capture(&b, &[(131, 130), (171, 170), (191, 190)]);
+        let mut seen: Vec<u64> = Vec::new();
+        replay(&[a.to_str().unwrap().to_string(), b.to_str().unwrap().to_string()], 0, |ev| {
+            seen.push(ev.exchange_ts);
+        })
+        .unwrap();
+        assert_eq!(seen, vec![100, 130, 160, 170, 180, 190], "one PacketHeader per record, merged on exchange_ts");
+        assert!(seen.windows(2).all(|w| w[0] <= w[1]), "the invariant main.rs's lookahead-drain depends on");
+        let _ = std::fs::remove_file(&a);
+        let _ = std::fs::remove_file(&b);
+    }
 }

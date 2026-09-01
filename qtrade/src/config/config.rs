@@ -28,10 +28,22 @@ pub struct RunSection {
     /// asking "is this backtest or live" is now this field, not a flag.
     pub mode: String,
     pub session_id: u32,
-    /// The capture file to replay. `feed_replay::load_refdata` derives
-    /// that day's real `MCXScrips.bcp` path from this filename (FR-16)
-    /// -- no separate `contract_file` field needed.
-    pub recording_path: String,
+    /// The capture file(s) to replay, in the order they should tie-break
+    /// on an exact-timestamp collision (`recording_paths[0]` wins). One
+    /// entry is the common case; two-plus entries are for a strategy
+    /// whose instruments live on different MCX stream files the same day
+    /// (each `.../mcx_feeder_Increment_capture_DD_MM_YYYY_1_N.bin` is one
+    /// stream). `feed_replay` k-way merges them on `exchange_ts` before
+    /// decode -- see `feed_replay_user_doc.md` §2b. `feed_replay::load_refdata`
+    /// derives that day's real `MCXScrips.bcp` from `recording_paths[0]`'s
+    /// filename (FR-16); every stream of one day shares the same
+    /// contract file, so any one of them resolves it.
+    ///
+    /// Config accepts either `recording_path = "one.bin"` (single) or
+    /// `recording_paths = "a.bin, b.bin"` (comma-separated); exactly one
+    /// of the two keys must be present. Backtest-only -- unread in live,
+    /// same as `[deployment]` keys are unread in backtest.
+    pub recording_paths: Vec<String>,
     /// Parent of this run's own timestamped output folder (was the
     /// hardcoded `LOG_DIR` constant).
     pub report_dir: String,
@@ -168,7 +180,32 @@ fn parse(text: &str, path: &Path) -> Result<Config, ConfigError> {
 
     let mode = require("mode")?;
     let session_id = parse_int(&require("session_id")?, "session_id")? as u32;
-    let recording_path = require("recording_path")?;
+    // Exactly one of `recording_path` / `recording_paths` -- a single
+    // path stays a single quoted string (this hand-rolled parser has no
+    // array grammar); a list is one quoted string of comma-separated
+    // paths.
+    let recording_paths = match (run_raw.get("recording_path"), run_raw.get("recording_paths")) {
+        (Some(_), Some(_)) => {
+            return Err(ConfigError(format!(
+                "{}: [run] has both `recording_path` and `recording_paths` -- use one or the other",
+                path.display()
+            )))
+        }
+        (Some(single), None) => vec![single.clone()],
+        (None, Some(list)) => {
+            let paths: Vec<String> = list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+            if paths.is_empty() {
+                return Err(ConfigError(format!("{}: [run].recording_paths is empty", path.display())));
+            }
+            paths
+        }
+        (None, None) => {
+            return Err(ConfigError(format!(
+                "{}: [run] missing required key `recording_path` (or `recording_paths` for a multi-stream run)",
+                path.display()
+            )))
+        }
+    };
     let report_dir = require("report_dir")?;
     let max_outer_records = match run_raw.get("max_outer_records") {
         Some(raw) => parse_int(raw, "max_outer_records")?,
@@ -201,7 +238,7 @@ fn parse(text: &str, path: &Path) -> Result<Config, ConfigError> {
     };
 
     Ok(Config {
-        run: RunSection { mode, session_id, recording_path, report_dir, max_outer_records, max_feed_stdout_lines, order_outbound_latency_ns, order_inbound_latency_ns, max_feed_delta_ns, log_level },
+        run: RunSection { mode, session_id, recording_paths, report_dir, max_outer_records, max_feed_stdout_lines, order_outbound_latency_ns, order_inbound_latency_ns, max_feed_delta_ns, log_level },
         deployment: DeploymentSection::default(),
     })
 }
@@ -243,7 +280,7 @@ mod tests {
         let cfg = parse(text, &dummy_path()).unwrap();
         assert_eq!(cfg.run.mode, "backtest");
         assert_eq!(cfg.run.session_id, 1);
-        assert_eq!(cfg.run.recording_path, "/mnt/MCX_Recording_Files/mcx_feeder_Increment_capture_19_01_2026_1_4.bin");
+        assert_eq!(cfg.run.recording_paths, vec!["/mnt/MCX_Recording_Files/mcx_feeder_Increment_capture_19_01_2026_1_4.bin"]);
         assert_eq!(cfg.run.report_dir, "logs/qtrade");
         assert_eq!(cfg.run.max_outer_records, 0, "optional key defaults to 0 (no limit)");
         assert_eq!(cfg.run.max_feed_stdout_lines, 200, "optional key defaults to 200");
@@ -275,6 +312,33 @@ mod tests {
         assert_eq!(cfg.run.order_inbound_latency_ns, 250_000);
         assert_eq!(cfg.run.max_feed_delta_ns, 100_000_000);
         assert_eq!(cfg.run.log_level, "debug");
+    }
+
+    #[test]
+    fn recording_paths_accepts_a_comma_separated_list_in_order() {
+        let text = r#"
+            [run]
+            mode = "backtest"
+            session_id = 1
+            recording_paths = "  a_1_2.bin , b_1_4.bin ,c_1_5.bin "
+            report_dir = "logs"
+        "#;
+        let cfg = parse(text, &dummy_path()).unwrap();
+        assert_eq!(cfg.run.recording_paths, vec!["a_1_2.bin", "b_1_4.bin", "c_1_5.bin"], "trimmed, in file order");
+    }
+
+    #[test]
+    fn recording_path_and_recording_paths_together_is_a_hard_error() {
+        let text = "[run]\nmode = \"backtest\"\nsession_id = 1\nrecording_path = \"a.bin\"\nrecording_paths = \"a.bin, b.bin\"\nreport_dir = \"logs\"\n";
+        let err = parse(text, &dummy_path()).unwrap_err();
+        assert!(err.to_string().contains("both `recording_path` and `recording_paths`"), "{err}");
+    }
+
+    #[test]
+    fn missing_both_recording_keys_is_a_hard_error() {
+        let text = "[run]\nmode = \"backtest\"\nsession_id = 1\nreport_dir = \"logs\"\n";
+        let err = parse(text, &dummy_path()).unwrap_err();
+        assert!(err.to_string().contains("missing required key `recording_path`"), "{err}");
     }
 
     #[test]

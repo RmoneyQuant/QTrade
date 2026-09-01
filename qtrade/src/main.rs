@@ -268,7 +268,14 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let capture_path = cfg.run.recording_path.as_str();
+    // One capture file is the common case; more than one is a k-way merge
+    // for a strategy whose instruments live on different MCX stream files
+    // the same day (`feed_replay::replay` does the merge -- see
+    // `feed_replay_user_doc.md` §2b). `primary_path` (`recording_paths[0]`)
+    // is what derives this day's real `MCXScrips.bcp` -- every stream of
+    // one day shares one contract file, so any one resolves it.
+    let capture_paths: &[String] = &cfg.run.recording_paths;
+    let primary_path = capture_paths[0].as_str();
     let max_outer_records = cfg.run.max_outer_records;
     // `cfg.run.max_feed_stdout_lines` is `limit_order_book_generator`'s
     // own config knob -- unused while `multi_instrument_bracket` is
@@ -278,7 +285,7 @@ fn main() -> ExitCode {
     // pointing this at any real day's capture file finds that same
     // day's real reference data automatically -- no second date
     // argument to keep in sync with the first, and no hardcoded date.
-    let master = match feed_replay::load_refdata(capture_path) {
+    let master = match feed_replay::load_refdata(primary_path) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("{e}");
@@ -354,7 +361,17 @@ fn main() -> ExitCode {
     // snapshot file for the real, full-session union of each tracked
     // instrument's band and seeds it before the main replay starts.
     // Works for any day whose paired snapshot file exists, automatically.
-    if let Some(snapshot_path) = feed_replay::snapshot_path_for(capture_path) {
+    // One paired snapshot file per capture stream. A tracked instrument's
+    // real band comes from whichever stream's snapshot actually carries
+    // it (e.g. CRUDEOIL on stream 2, NATURALGAS on stream 4 the same
+    // day), so scan every stream and union the results before the replay
+    // starts.
+    let mut seeded: std::collections::HashSet<InstrumentId> = std::collections::HashSet::new();
+    for path in capture_paths {
+        let Some(snapshot_path) = feed_replay::snapshot_path_for(path) else {
+            println!("{path} doesn't look like an Increment_capture file -- no paired snapshot file to auto-seed from");
+            continue;
+        };
         println!("scanning the paired snapshot file for real price bands: {snapshot_path}");
         match feed_replay::scan_snapshot_for_bands(&snapshot_path, &tracked_ids) {
             Ok(bands) => {
@@ -367,19 +384,18 @@ fn main() -> ExitCode {
                         *upper as f64 / RUPEE_RAW,
                     );
                     cache.seed_book_band(*id, *lower, *upper);
-                }
-                for id in &tracked_ids {
-                    if !bands.contains_key(id) {
-                        println!("  {} ({}): no InstrumentInfo found in the snapshot file -- not seeded, `book` will panic if a real order arrives before it learns one", label_of(*id), id.0);
-                    }
+                    seeded.insert(*id);
                 }
             }
-            Err(e) => println!("  could not scan {snapshot_path}: {e} -- proceeding unseeded"),
+            Err(e) => println!("  could not scan {snapshot_path}: {e} -- proceeding without it"),
         }
-        println!();
-    } else {
-        println!("capture path doesn't look like an Increment_capture file -- no paired snapshot file to auto-seed from\n");
     }
+    for id in &tracked_ids {
+        if !seeded.contains(id) {
+            println!("  {} ({}): no InstrumentInfo found in any scanned snapshot file -- not seeded, `book` will panic if a real order arrives before it learns one", label_of(*id), id.0);
+        }
+    }
+    println!();
 
     let run_config = RunConfig {
         session_id: cfg.run.session_id,
@@ -468,7 +484,15 @@ fn main() -> ExitCode {
     }
 
     let limit_desc = if max_outer_records == 0 { "no limit -- full file, start to end".to_string() } else { format!("capped at {max_outer_records} outer records") };
-    println!("streaming {capture_path} record-by-record ({limit_desc})\n");
+    if capture_paths.len() == 1 {
+        println!("streaming {primary_path} record-by-record ({limit_desc})\n");
+    } else {
+        println!("k-way merging {} streams on exchange_ts, record-by-record ({limit_desc}):", capture_paths.len());
+        for (i, p) in capture_paths.iter().enumerate() {
+            println!("  [{i}] {p}");
+        }
+        println!();
+    }
 
     // Dual-clock replay (2026-08-27): `SimExchange` runs on the exchange's
     // own clock (`exchange_ts`), `Cache`/`EventDispatcher`/`Strategy` run
@@ -492,7 +516,7 @@ fn main() -> ExitCode {
     let mut next_arrival_alarm: Option<i64> = None;
     let mut next_visibility_alarm: Option<i64> = None;
 
-    let stats = match feed_replay::replay(capture_path, max_outer_records, |ev| {
+    let stats = match feed_replay::replay(capture_paths, max_outer_records, |ev| {
         let exchange_ts = ev.exchange_ts as i64;
         let recorder_ts = ev.recorder_ts;
         let delta = recorder_ts - exchange_ts;
@@ -531,7 +555,7 @@ fn main() -> ExitCode {
     }) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("failed to open {capture_path}: {e}");
+            eprintln!("failed to open capture stream(s) {capture_paths:?}: {e}");
             return ExitCode::FAILURE;
         }
     };

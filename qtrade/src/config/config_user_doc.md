@@ -19,9 +19,20 @@ mode                  = "backtest"   # required. Only "backtest" is implemented;
                                       # this is where the CLI "asks" backtest vs live now.
 session_id            = 1            # required. Feeds execution::RunConfig / ClOrdId (D40).
 recording_path        = "/mnt/MCX_Recording_Files/mcx_feeder_Increment_capture_19_01_2026_1_4.bin"
-                                      # required. feed_replay derives that day's real
-                                      # MCXScrips.bcp path from this filename (FR-16) --
-                                      # no separate contract_file field needed.
+                                      # ONE of recording_path / recording_paths is required.
+                                      # feed_replay derives that day's real MCXScrips.bcp
+                                      # path from this filename (FR-16) -- no separate
+                                      # contract_file field needed.
+# recording_paths     = "/mnt/.../capture_21_08_2026_1_2.bin, /mnt/.../capture_21_08_2026_1_4.bin"
+                                      # OR this: comma-separated list of same-day stream
+                                      # files, k-way merged on exchange_ts before decode
+                                      # (feed_replay_user_doc.md §2b). For a strategy whose
+                                      # instruments live on different MCX streams the same
+                                      # day (e.g. CRUDEOIL stream 2 + NATURALGAS stream 4).
+                                      # recording_paths[0] resolves the day's MCXScrips.bcp
+                                      # and wins any exact-timestamp tie. Having both keys,
+                                      # or neither, is a hard error. One entry behaves
+                                      # exactly like recording_path.
 report_dir            = "logs/qtrade" # required. Parent of this run's own timestamped
                                       # output folder (feed.csv/orders.log/fills.log/report.txt).
 max_outer_records     = 0            # optional, default 0 (no limit -- full file, start to end).
@@ -50,7 +61,7 @@ max_feed_delta_ns     = 250000000    # optional, default 250,000,000 (250ms). Th
 # consumer.
 ```
 
-**Only `mode`, `session_id`, `recording_path`, `report_dir` are required.** A missing required key, a missing `[run]` section entirely, or a malformed `key = value` line is a hard failure at startup with the file path and line number — same spirit as FR-16's contract-file mismatch: never a silent default standing in for a value that governs what the run actually does.
+**Required: `mode`, `session_id`, `report_dir`, and exactly one of `recording_path` / `recording_paths`.** A missing required key, a missing `[run]` section entirely, or a malformed `key = value` line is a hard failure at startup with the file path and line number — same spirit as FR-16's contract-file mismatch: never a silent default standing in for a value that governs what the run actually does.
 
 ## 3. The parser is hand-rolled, not general TOML
 

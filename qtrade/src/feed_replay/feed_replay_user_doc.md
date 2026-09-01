@@ -17,7 +17,7 @@ Split out of `dummy_strategy.rs` on 2026-08-24. That file used to do CLI/locatio
 - `resolve_front_month(master, underlying) -> Option<InstrumentId>` — resolves a name (e.g. `"CRUDEOIL"`) to that day's real front-month future token. A strategy declares names, never tokens (see e.g. `limit_order_book_generator.rs`'s `UNDERLYINGS`).
 - `snapshot_path_for(capture_path) -> Option<String>` — the paired `snapshot_capture` file's path for an `Increment_capture` file, or `None` if it isn't one.
 - `scan_snapshot_for_bands(path, tracked_ids) -> io::Result<HashMap<InstrumentId, (lower_raw, upper_raw, count)>>` — see §3.
-- `replay(capture_path, max_outer_records, on_event)` — streams the capture file record by record, decodes every message, and calls `on_event(ReplayEvent { event, seq_no, exchange_ts, recorder_ts })` for each one. Owns all outer/inner wire framing; a caller never touches raw bytes.
+- `replay(capture_paths: &[String], max_outer_records, on_event)` — streams the capture file(s) record by record, decodes every message, and calls `on_event(ReplayEvent { event, seq_no, exchange_ts, recorder_ts })` for each one. Owns all outer/inner wire framing; a caller never touches raw bytes. One path is the common case; two-plus paths are k-way merged (§2b).
 
 ## 2a. Two real clocks now, no synthetic one (dual-clock replay, 2026-08-27)
 
@@ -33,6 +33,25 @@ Split out of `dummy_strategy.rs` on 2026-08-24. That file used to do CLI/locatio
 **MCX capture files recorded before ~2026-08-20 can contain a negative `recorder_ts - exchange_ts` delta**, and `main.rs`'s own hard-failure check (D20 fail-fast, never clamped) will stop the run the moment it finds one. This is not this module's bug and not a reason to loosen that check — it's a real fact about the recording rig: two physical servers (`192.168.xx.11`/`192.168.xx.7`) capture in parallel, a monitoring script substitutes a row from the other server on certain errors, and **the two servers' clocks were not NTP-synced to the same reference until ~2026-08-20** (one pointed at an AWS time source, the other at India NPL, before that). A substituted row from the "other" clock, right at a boundary, is enough to produce a small (tens to low-hundreds of nanoseconds) negative reading — confirmed for real: `19_08_2026`'s own file hit exactly this, `-135ns`, about a fifth of the way through the session.
 
 **Pick a capture day at or after `21_08_2026`** for anything exercising the dual-clock replay against real data. `21_08_2026` itself is verified clean (zero negative deltas across a 60-million-record real scan) and is what `naturalgas_bracket`'s own real run now uses — see `naturalgas_bracket.md`. This isn't a property `feed_replay.rs` can detect or fix on its own (it has no way to know which side of the sync date a given file falls on); it's stated here so the next person picking a day for a real run doesn't have to rediscover it by hitting the same fail-fast.
+
+## 2b. Multi-stream k-way merge (2026-08-31)
+
+One MCX trading day is split across up to 8 `mcx_feeder_Increment_capture_DD_MM_YYYY_1_N.bin` stream files, and a given instrument's data lives on exactly one of them (`21_08_2026`: CRUDEOIL on stream 2, NATURALGAS on stream 4). A strategy watching instruments on different streams needs all of them in one run.
+
+`replay` takes `&[String]` now. With **one** path it's a plain read-ahead over that file — byte-identical `on_event` sequence to the old single-source loop (verified: `multi_instrument_bracket` on `21_08_2026` stream 4 alone reproduces the exact prior result — 101 round trips, 202 fills, `net_pnl = -17,437.20`, `events.log` 2,327 lines). With **two-plus** paths, `MergeSource` k-way merges them:
+
+- **Merge key: each outer record's own starting `exchange_ts`** (the leading `PacketHeader`'s `TransactTime`, or the carried-forward per-stream value for a headerless record). `exchange_ts` is monotonic non-decreasing within one MCX stream, so the merged sequence is monotonic non-decreasing too — which is exactly the invariant `main.rs`'s lookahead-drain already assumes, so **it needs no change for N > 1** (this is why the merge is on `exchange_ts` and not `recorder_ts`: merging on `recorder_ts` would let `exchange_ts` arrive slightly out of order between streams and could drive `SimClock` backwards).
+- **Tie-break: the path's index in the config list** (`recording_paths[0]` wins). Pure data, never IO/thread timing → fully reproducible (NFR-01).
+- **Bounded memory** unchanged: one buffered record per stream (N is tiny), payload buffers swap with the caller's rather than reallocating.
+- **Per-record feed-latency check (D20) still runs per merged record** — a bad delta on *any* stream fails the run, same as a single-stream run.
+
+`main.rs` scans one paired snapshot file per stream (§3) and unions the bands before the replay — so CRUDEOIL's band comes from stream 2's snapshot, NATURALGAS's from stream 4's, automatically.
+
+Verified end to end: `multi_instrument_bracket` over `21_08_2026` streams 2 + 4 merged — 721.7M outer records, 204 round trips (**103 CRUDEOIL + 101 NATURALGAS**, both trading off the one merged feed), 408 fills, `denied=0 rejected=0`. The NATURALGAS side is identical to the standalone stream-4 run (same 101 round trips, same entry/exit prices) — the merge is a clean superset, it adds the other stream without perturbing what each instrument sees.
+
+Unit-tested in `feed_replay.rs`'s own `mod tests`: file-order passthrough for N=1, global `exchange_ts` ordering across two sources, deterministic path-index tie-break (both directions), early-EOF of one source not stalling the other, and `replay` itself emitting non-decreasing `exchange_ts` from a merged pair.
+
+This whole mechanism is backtest-only, same as everything else in this file — live combines its multicast streams by arrival order, not by a timestamp merge over files on disk.
 
 ## 3. The price-band pre-scan, and why it exists
 
