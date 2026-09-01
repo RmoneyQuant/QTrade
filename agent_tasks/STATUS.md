@@ -104,6 +104,10 @@ Verified: `cargo test --release` — **294 tests, 0 failures** (281 baseline + 8
 
 Backtest-only, same as everything else in `feed_replay` / the `Scheduler`-driven loop: live combines its multicast streams by arrival order, not a timestamp merge over files. The config field is just unread in live, same as `[deployment]` keys are unread in backtest.
 
+## Post-phase-1: partial-fill events now report `PartiallyFilled` (2026-09-01)
+
+Small correction found while building a throwaway `order_lifecycle_demo` strategy (deliberately walks an order through every reachable `OrderState`). `execution.rs` always tracked `order.state` correctly through a partial fill, but the two `log_event` calls that build the `OrderEventRecord` for `on_order_update` / `orders.log` each passed a **hardcoded literal**: the fill site emitted `OrderState::Filled`, the `Resting` site emitted `OrderState::Accepted` — so a partial fill surfaced to a strategy as `Filled` then `Accepted`, never `PartiallyFilled` (a strategy would read the first event as "whole order filled"; an `Accepted` after `Filled` reads as a terminal→non-terminal regression). Fixed: both sites capture `order.state` after updating it and pass that; unknown/already-terminal orders keep the old fallback. Descriptions clarified (`"partially filled qty=N kind=… (leaves=M)"` / `"remainder working after partial fill"`). Verified against real `21_08_2026` stream-4 data via the demo strategy (a ~900-lot touch-only `LimitDay` that fills ~81 lots and rests the rest — now emits `PartiallyFilled` twice); `cargo test --release` unchanged at **294 passing, 0 failed** (no test asserted the old hardcoded value). Docs: `execution_user_doc.md` §1, `strategy/order_lifecycle_demo/order_lifecycle_demo.md`. `main.rs` currently compiles `order_lifecycle_demo` in place of `multi_instrument_bracket` — a local demo swap, not committed.
+
 ## Environment
 
 - Rust toolchain: `rustc`/`cargo` 1.98.0, via rustup, user-local under `~/.cargo`.

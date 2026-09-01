@@ -65,8 +65,8 @@ mod strategy;
 // and `ctx.cancel()`, none of which `naturalgas_bracket` (still present,
 // just not compiled in) ever exercised. `limit_order_book_generator/
 // limit_order_book_generator.rs` is the pure-observer alternative.
-#[path = "strategy/multi_instrument_bracket/multi_instrument_bracket.rs"]
-mod multi_instrument_bracket;
+#[path = "strategy/order_lifecycle_demo/order_lifecycle_demo.rs"]
+mod order_lifecycle_demo;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -81,7 +81,7 @@ use cache::{Cache, InstrumentFilter};
 use control_dispatcher::ControlDispatcher;
 use event_dispatcher::EventDispatcher;
 use execution::{CostConfig, ExecutionEngine, LocalOtrConfig, OtrConfigSummary, RunConfig};
-use multi_instrument_bracket::MultiInstrumentBracket;
+use order_lifecycle_demo::OrderLifecycleDemo;
 use scheduler::{EventClass, EventPayload, Scheduler, Target};
 use simulator::SimExchange;
 use strategy::Strategy;
@@ -293,14 +293,14 @@ fn main() -> ExitCode {
         }
     };
 
-    // The strategy declares *names* (`multi_instrument_bracket::UNDERLYINGS`);
+    // The strategy declares *names* (`order_lifecycle_demo::UNDERLYINGS`);
     // this orchestrator resolves each to *this day's* real front-month
     // token via `feed_replay`. The strategy never sees a hardcoded
     // token from a different day.
-    let resolved: Vec<(&str, Option<InstrumentId>)> = multi_instrument_bracket::UNDERLYINGS.iter().map(|name| (*name, feed_replay::resolve_front_month(&master, name))).collect();
+    let resolved: Vec<(&str, Option<InstrumentId>)> = order_lifecycle_demo::UNDERLYINGS.iter().map(|name| (*name, feed_replay::resolve_front_month(&master, name))).collect();
     let tracked_ids: Vec<InstrumentId> = resolved.iter().filter_map(|(_, id)| *id).collect();
     if tracked_ids.is_empty() {
-        eprintln!("none of {:?} resolved to a real front-month future in this day's refdata", multi_instrument_bracket::UNDERLYINGS);
+        eprintln!("none of {:?} resolved to a real front-month future in this day's refdata", order_lifecycle_demo::UNDERLYINGS);
         return ExitCode::FAILURE;
     }
     let names_by_id: HashMap<InstrumentId, &str> = resolved.iter().filter_map(|(name, id)| id.map(|i| (i, *name))).collect();
@@ -454,7 +454,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let strategy = MultiInstrumentBracket::new();
+    let strategy = OrderLifecycleDemo::new();
     // `Rc<RefCell<_>>`, not `Box`: a clone (coerced to `dyn Strategy`) is
     // what actually moves into `event_dispatcher`'s/`control_dispatcher`'s
     // registries below -- this concrete handle stays here so the final

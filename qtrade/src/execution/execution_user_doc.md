@@ -78,6 +78,31 @@ is finally delivered → still `Filled`, still one fill record,
 `venue_cancel_calls() == 1`). This is the acceptance bar's own named
 scenario, not an incidental test.
 
+### Emitted events reflect the real state on a partial fill (2026-09-01)
+
+`order.state` was always tracked correctly through a partial fill (the
+`PartiallyFilled` assignment above, and the mirror one in the `Resting`
+arm when `filled_qty > 0`). But the two `log_event` calls that build the
+`OrderEventRecord` handed to `on_order_update` / written to `orders.log`
+each passed a **hardcoded literal** instead of `order.state`: the fill
+site emitted `OrderState::Filled`, the resting site emitted
+`OrderState::Accepted` — so a partial fill surfaced to a strategy as
+`Filled` then `Accepted`, never `PartiallyFilled`. A strategy keying off
+`on_order_update.resulting_state` would read the first event as "my whole
+order filled," and an `Accepted` after a `Filled` looks like a terminal →
+non-terminal regression.
+
+Fixed: both sites now capture `order.state` after updating it and pass
+that. A partial fill now emits `PartiallyFilled` for both the executed
+chunk (`"partially filled qty=N kind=… (leaves=M)"`) and the working
+remainder (`"remainder working after partial fill"`). Unknown /
+already-terminal orders keep the old `Filled` / `Accepted` fallback, so
+nothing else moved. Verified against real `21_08_2026` data (a ~900-lot
+touch-only `LimitDay` that fills ~81 lots and rests the rest) via the
+`order_lifecycle_demo` strategy; all 294 workspace tests still pass (no
+test asserted on the old hardcoded value — they check `order.state`, the
+field, which was already right).
+
 ## 2. Three gates, two rejection paths (FR-B27, D36)
 
 **Since the 2026-08-27 dual-clock pass, this is a genuine two-phase call, not one method.** `submit_order_local` runs, in order: an instrument-registry lookup, **Order

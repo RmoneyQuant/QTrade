@@ -1511,6 +1511,14 @@ impl ExecutionEngine {
                     self.log_event(client_order_id, &format!("venue rejected: {reason:?}"), OrderState::Rejected, now_ns);
                 }
                 ExecReport::Resting { client_order_id, handle, qty } => {
+                    // `logged_state` defaults to `Accepted` (an unknown or
+                    // already-terminal order keeps the pre-fix behaviour);
+                    // for a live order it becomes whatever `order.state`
+                    // was just set to -- `PartiallyFilled` when this
+                    // remainder is resting *after* a partial fill, so the
+                    // emitted `OrderEventRecord` reflects the real state
+                    // rather than a hardcoded `Accepted`.
+                    let mut logged_state = OrderState::Accepted;
                     if let Some(order) = self.orders.get_mut(&client_order_id) {
                         if !order.state.is_terminal() {
                             order.leaves_qty = qty;
@@ -1522,9 +1530,11 @@ impl ExecutionEngine {
                                 (_, None) => true, // no prior same-side quote to improve on -- treat as improving
                             };
                             order.state = if order.filled_qty.0 > 0 { OrderState::PartiallyFilled } else { OrderState::Accepted };
+                            logged_state = order.state;
                         }
                     }
-                    self.log_event(client_order_id, "resting", OrderState::Accepted, now_ns);
+                    let desc = if logged_state == OrderState::PartiallyFilled { "remainder working after partial fill" } else { "resting" };
+                    self.log_event(client_order_id, desc, logged_state, now_ns);
                 }
                 ExecReport::Filled { client_order_id, price, qty, kind } => {
                     self.on_fill(client_order_id, price, qty, kind, now_ns);
@@ -1564,6 +1574,13 @@ impl ExecutionEngine {
         let cost = self.cost_model.round_trip(&instrument, qty.to_lots(), price, side);
         self.portfolio.apply_fill(strategy_id, instrument_id, side, qty, price, cost.total_rupees, instrument.multiplier);
 
+        // Captured from `order.state` after the update below, so the
+        // emitted `OrderEventRecord` says `PartiallyFilled` (not a
+        // hardcoded `Filled`) when this fill only consumed part of the
+        // order. Defaults to `Filled` for an unknown order (a fill always
+        // implies a prior submit, so this branch is not expected).
+        let mut logged_state = OrderState::Filled;
+        let mut leaves_qty = 0i64;
         if let Some(order) = self.orders.get_mut(&client_order_id) {
             order.filled_qty = Qty(order.filled_qty.0 + qty.0);
             order.leaves_qty = Qty((order.requested_qty.0 - order.filled_qty.0).max(0));
@@ -1571,6 +1588,8 @@ impl ExecutionEngine {
             // unconditionally, overriding `PendingCancel` (or any other
             // non-terminal state) alike -- a fill always wins.
             order.state = if order.leaves_qty.0 <= 0 { OrderState::Filled } else { OrderState::PartiallyFilled };
+            logged_state = order.state;
+            leaves_qty = order.leaves_qty.0;
             if order.state == OrderState::Filled {
                 // Order is done -- drop its sticky queue-position entry
                 // now rather than let it accumulate for the life of the
@@ -1599,7 +1618,12 @@ impl ExecutionEngine {
                 markouts: self.markout_horizons_ns.iter().map(|h| (*h, None)).collect(),
             });
         }
-        self.log_event(client_order_id, &format!("filled qty={} kind={kind:?}", qty.0), OrderState::Filled, now_ns);
+        let desc = if logged_state == OrderState::PartiallyFilled {
+            format!("partially filled qty={} kind={kind:?} (leaves={leaves_qty})", qty.0)
+        } else {
+            format!("filled qty={} kind={kind:?}", qty.0)
+        };
+        self.log_event(client_order_id, &desc, logged_state, now_ns);
     }
 
     // ---- reporting (FR-B31, D26) ----
