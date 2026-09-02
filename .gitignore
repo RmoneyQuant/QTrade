@@ -29,4 +29,7 @@ npm-debug.log*
 .idea/
 
 # logs
-./qtrade/logsreferences/cme_feeder_27_08_2026.bin
+./qtrade/logs
+
+# large capture files not meant for git
+references/cme_feeder_27_08_2026.bin
