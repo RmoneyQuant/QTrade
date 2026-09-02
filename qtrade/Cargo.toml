@@ -69,6 +69,19 @@ path = "src/execution/validate.rs"
 name = "feed-replay-validate"
 path = "src/feed_replay/validate.rs"
 
+# A faithful Rust port of `references/CME_parsefeed.cpp` -- reads a CME
+# capture file's own record framing and, when the payload is large
+# enough, interprets it as `CONTRACT_DETAILS`. Exploratory, same reason
+# as the other harnesses above (no [lib] target): CME isn't wired into
+# main.rs at all yet (types::Venue has only Mcx). Confirmed 2026-09-01
+# against real /mnt/CME_Recording_Files/ data that real records are too
+# short for this struct and look encrypted -- see the file's own doc
+# comment. Scaffolding for the real decrypt-then-decode step, not a
+# working decoder yet.
+[[bin]]
+name = "cme-decoder"
+path = "src/cme_decoder/cme_decoder.rs"
+
 [dependencies]
 tracing = "0.1.44"
 tracing-appender = "0.2.5"

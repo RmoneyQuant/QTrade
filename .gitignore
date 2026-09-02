@@ -29,4 +29,4 @@ npm-debug.log*
 .idea/
 
 # logs
-./qtrade/logs
+./qtrade/logsreferences/cme_feeder_27_08_2026.bin

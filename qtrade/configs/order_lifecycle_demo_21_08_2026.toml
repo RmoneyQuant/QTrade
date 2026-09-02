@@ -1,0 +1,11 @@
+[run]
+mode = "backtest"
+session_id = 1
+recording_path = "/mnt/MCX_Recording_Files/mcx_feeder_Increment_capture_21_08_2026_1_4.bin"
+report_dir = "logs/qtrade"
+order_outbound_latency_ns = 250000
+order_inbound_latency_ns = 250000
+max_feed_delta_ns = 250000000
+log_level = "debug"
+
+[deployment]
