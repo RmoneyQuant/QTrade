@@ -314,28 +314,23 @@ fn main() -> ExitCode {
     let filter = InstrumentFilter::from_native_ids(tracked_ids.iter().map(|id| id.0 as i64));
 
     // The real `Instrument` record(s) `execution::ExecutionEngine` needs
-    // for tick-size/freeze-qty validation and cost-model lookups -- kept
+    // for tick-size/max-order-qty validation and cost-model lookups -- kept
     // ready regardless of whether the currently plugged-in strategy ever
     // actually submits an order (some don't -- `LimitOrderBookGenerator`
     // never does, and `orders.log`/`fills.log`/`report.txt` legitimately
     // come out empty for it; `multi_instrument_bracket`, compiled in now, does).
     //
-    // `freeze_qty` is overridden below -- a separate, still-open gap:
-    // `refdata` has no source column for freeze quantity and defaults
-    // every instrument's `freeze_qty` to `0`, which would deny every
-    // order regardless of tick-size units. This override is demo-only
-    // headroom for whatever strategy is plugged in, in `Lots`, not a
-    // claim about MCX's real freeze quantity.
-    const DEMO_FREEZE_QTY_LOTS: i64 = 1_000;
+    // `max_single_order_qty` is no longer overridden here (2026-09-03): `refdata`
+    // now maps the real per-instrument, per-day max order size straight
+    // out of the day's contract file (`parts[71]`, in lots -- see that
+    // parse's own comment for how the column was identified and verified).
+    // The former `DEMO_FREEZE_QTY_LOTS = 1_000` blanket override is gone;
+    // NATURALGAS's real cap, for instance, is 48 lots, not 1,000.
     let trade_instruments: Vec<types::Instrument> = master
         .all()
         .iter()
         .filter(|i| tracked_ids.contains(&i.id))
         .cloned()
-        .map(|mut i| {
-            i.freeze_qty = DEMO_FREEZE_QTY_LOTS;
-            i
-        })
         .collect();
 
     println!(

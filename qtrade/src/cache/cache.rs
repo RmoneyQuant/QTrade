@@ -353,7 +353,7 @@ mod tests {
             tick_size: Price(RUPEE_RAW), // Rs 1.00 -- matches the RUPEE_RAW-scaled prices every test below uses
             lot_size: 1,
             multiplier: 1,
-            freeze_qty: 0,
+            max_single_order_qty: 0,
             price_band: None,
             currency: Currency::Inr,
         }

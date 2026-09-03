@@ -13,7 +13,7 @@
 //! | State            | Step here                                        |
 //! |------------------|-------------------------------------------------|
 //! | `Submitted`      | every `ctx.submit` -- qtrade's own "gates passed" |
-//! | `Denied`         | step 1: qty over the instrument's freeze qty (local Validation gate) |
+//! | `Denied`         | step 1: qty over the instrument's max single order qty (local gate) |
 //! | `Rejected`       | step 2: `BookOrCancel` priced through the ask -> venue `WouldCross` |
 //! | `Accepted`       | step 3: deep passive `LimitDay` that cannot fill |
 //! | `PendingUpdate`  | step 4: `ctx.modify` of the resting order        |
@@ -58,7 +58,10 @@ const RUPEE_RAW: f64 = 100_000_000.0;
 /// Fallback NATURALGAS tick (Rs 0.10 in wire units) if refdata lookup
 /// somehow fails.
 const NATURALGAS_TICK_FALLBACK: i64 = 10_000_000;
-const FREEZE_FALLBACK_LOTS: i64 = 1_000;
+const MAX_ORDER_QTY_FALLBACK_LOTS: i64 = 1_000;
+/// How many ticks step 6 will wait for a touch thin enough to partial
+/// against before giving up and submitting anyway -- see that step.
+const PARTIAL_MAX_ATTEMPTS: u32 = 500;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Step {
@@ -80,11 +83,12 @@ pub struct OrderLifecycleDemo {
     next_at_ns: u64,
     resting_id: Option<u64>,
     partial_id: Option<u64>,
+    partial_attempts: u32,
 }
 
 impl OrderLifecycleDemo {
     pub fn new() -> Self {
-        Self { instrument: None, step: Step::WaitStart, next_at_ns: START_NS, resting_id: None, partial_id: None }
+        Self { instrument: None, step: Step::WaitStart, next_at_ns: START_NS, resting_id: None, partial_id: None, partial_attempts: 0 }
     }
 
     /// `main.rs`'s summary loop calls this on every strategy; this one
@@ -97,9 +101,9 @@ impl OrderLifecycleDemo {
         ctx.refdata().get(instrument).map(|i| i.tick_size.0).filter(|t| *t > 0).unwrap_or(NATURALGAS_TICK_FALLBACK)
     }
 
-    fn freeze_lots(ctx: &Ctx, instrument: InstrumentId) -> i64 {
-        let f = ctx.refdata().get(instrument).map(|i| i.freeze_qty).unwrap_or(FREEZE_FALLBACK_LOTS);
-        if f > 0 { f } else { FREEZE_FALLBACK_LOTS }
+    fn max_order_lots(ctx: &Ctx, instrument: InstrumentId) -> i64 {
+        let f = ctx.refdata().get(instrument).map(|i| i.max_single_order_qty).unwrap_or(MAX_ORDER_QTY_FALLBACK_LOTS);
+        if f > 0 { f } else { MAX_ORDER_QTY_FALLBACK_LOTS }
     }
 
     /// The whole script -- one step per call, only once `now_ns` has
@@ -133,12 +137,13 @@ impl OrderLifecycleDemo {
                 advance(self, Step::Denied);
             }
 
-            // 1. DENIED -- qty over the instrument's freeze quantity trips
+            // 1. DENIED -- qty over the instrument's max single order quantity
+            //    (MCX: "maximum single transaction quantity") trips
             //    the local Validation gate; the order never reaches the venue.
             Step::Denied => {
-                let over = Lots(Self::freeze_lots(ctx, instrument) + 100);
+                let over = Lots(Self::max_order_lots(ctx, instrument) + 100);
                 let px = Price(bid_raw - 20 * tick); // deep, harmless price
-                log!("STEP 1/8 DENIED", "submit BUY {} lots (over freeze) LimitDay @ Rs {:.2} -- expect state=Denied (local gate)", over.0, px.0 as f64 / RUPEE_RAW);
+                log!("STEP 1/8 DENIED", "submit BUY {} lots (over max single order qty) LimitDay @ Rs {:.2} -- expect state=Denied (local gate)", over.0, px.0 as f64 / RUPEE_RAW);
                 let _ = ctx.submit(instrument, Side::Buy, OrderType::LimitDay(px), over);
                 advance(self, Step::Rejected);
             }
@@ -192,20 +197,35 @@ impl OrderLifecycleDemo {
                 advance(self, Step::PartialFill);
             }
 
-            // 6. PARTIALLY_FILLED -- a huge BUY LimitDay priced exactly
-            //    at the ask: it can only match the best-ask level (nothing
-            //    is priced lower), fills whatever size is resting there,
-            //    and rests the enormous unfilled remainder as a passive
-            //    bid. 5,000 lots dwarfs any real NATURALGAS touch size, so
-            //    this reliably partials. If it still fully fills some run,
-            //    the book was extraordinarily deep -- raise the qty.
+            // 6. PARTIALLY_FILLED -- a BUY LimitDay at the touch, sized at
+            //    this instrument's real max single order quantity (its maximum order
+            //    size). Reworked 2026-09-03: `max_single_order_qty` is now the real
+            //    per-day value from the contract file (48 lots for
+            //    NATURALGAS), not the old blanket 1,000-lot demo override,
+            //    so the previous trick -- dwarf the touch with a huge
+            //    order -- is no longer possible: nothing may exceed the
+            //    cap, and the cap is smaller than the touch often is.
+            //
+            //    Instead this waits for a tick where the best-ask level is
+            //    itself thinner than the cap, then takes all of it and
+            //    rests the remainder -- a genuine partial. If the book
+            //    stays thicker than the cap for `PARTIAL_MAX_ATTEMPTS`
+            //    ticks it submits anyway; a full fill still exercises the
+            //    path, it just doesn't demonstrate `PartiallyFilled`, and
+            //    the log says which happened.
             Step::PartialFill => {
+                let cap_lots = Self::max_order_lots(ctx, instrument);
+                let touch_lots = ask.qty.0 / crate::types::RAW_QTY_PER_LOT;
+                if touch_lots >= cap_lots && self.partial_attempts < PARTIAL_MAX_ATTEMPTS {
+                    // Touch is at least as deep as the most we may send --
+                    // a full fill, not a partial. Wait for a thinner one
+                    // (`next_at_ns` is untouched, so the next tick retries).
+                    self.partial_attempts += 1;
+                    return;
+                }
                 let px = Price(ask_raw); // touch-only: matches just the best ask
-                // Big, but kept *under* the freeze qty (step 1 already
-                // showed that gate) -- the best-ask level holds only tens
-                // of lots, so this partials rather than fully fills.
-                let qty = Lots((Self::freeze_lots(ctx, instrument) - 100).max(100));
-                log!("STEP 6/8 PARTIAL", "submit BUY {} lots LimitDay @ Rs {:.2} (touch only, under freeze) -- expect a partial Filled then state=PartiallyFilled for the working remainder", qty.0, px.0 as f64 / RUPEE_RAW);
+                let qty = Lots(cap_lots);
+                log!("STEP 6/8 PARTIAL", "submit BUY {} lots (= max single order qty) LimitDay @ Rs {:.2} against a {}-lot touch after {} wait(s) -- expect {}", qty.0, px.0 as f64 / RUPEE_RAW, touch_lots, self.partial_attempts, if touch_lots < cap_lots { "a partial Filled then state=PartiallyFilled for the working remainder" } else { "a full Filled (gave up waiting for a thin touch)" });
                 match ctx.submit(instrument, Side::Buy, OrderType::LimitDay(px), qty) {
                     Ok(id) => {
                         self.partial_id = Some(id);

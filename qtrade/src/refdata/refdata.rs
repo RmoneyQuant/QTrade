@@ -141,6 +141,29 @@ pub fn load_mcx_instruments(path: &Path) -> Result<Vec<Instrument>, RefDataError
         // LotSize -- parts[20].
         let lot_size: i64 = parts[20].trim().parse().unwrap_or(0);
 
+        // Max single order quantity, in **lots** -- parts[71].
+        //
+        // MCX's own name for this field is **"Maximum single transaction
+        // quantity"** ("Maximum quantity permitted for single order for
+        // product"), per the official spec: *MCX Reference Data Files
+        // (Masters) Version 1.2*, circular MCX/CTCL/123/2026, a copy of
+        // which is in `references/`. Other venues call the same concept
+        // "freeze quantity" (NSE/BSE) -- see `types.rs`'s own
+        // `Instrument::max_single_order_qty` doc for the cross-venue
+        // naming table and why this codebase uses a venue-neutral name.
+        //
+        // Column position was first derived empirically (NATURALGAS's
+        // published 60,000 mmBtu cap / 1,250 mmBtu lot = 48 lots, and
+        // `parts[71]` reads exactly 48; NATGASMINI independently gives
+        // 240), then **confirmed against the official field order** in
+        // that spec: ... Base Price -> Maximum single transaction
+        // quantity -> Maximum single transaction value ..., which lands
+        // exactly on cols 70/71/72 in real rows.
+        //
+        // `0` (missing/unparseable) means "unknown" to `execution`'s gate,
+        // same as before this column was mapped.
+        let max_single_order_qty: i64 = parts[71].trim().parse().unwrap_or(0);
+
         // ExpiryDate -- parts[54], minus the IST offset if >0 else 0.
         let expiry_raw: i64 = parts[54].trim().parse().unwrap_or(0);
         let expiry_secs = if expiry_raw > 0 {
@@ -198,10 +221,11 @@ pub fn load_mcx_instruments(path: &Path) -> Result<Vec<Instrument>, RefDataError
             // meaning there is unclear -- see refdata_user_doc.md).
             // Defaulted to `lot_size`, the only defensible value.
             multiplier: lot_size,
-            // No freeze-quantity column in the T01 scope, and
-            // Contract.cpp's MCX branch never sets one either. Defaulted
-            // to 0 and documented as a stub for a later, real need.
-            freeze_qty: 0,
+            // Real, per-instrument, per-day max order size in lots --
+            // see the `max_single_order_qty` parse above for how this column was
+            // identified (it is genuinely undocumented in every reference
+            // we hold, so the evidence is written out there in full).
+            max_single_order_qty,
             price_band,
             currency: Currency::Inr,
         };

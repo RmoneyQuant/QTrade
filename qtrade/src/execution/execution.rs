@@ -151,9 +151,11 @@ pub enum DenyReason {
     /// Order Validation (D17): price is not a multiple of the
     /// instrument's tick size.
     TickSize,
-    /// Order Validation (D17): quantity exceeds the instrument's freeze
-    /// quantity (or is non-positive).
-    FreezeQty,
+    /// Order Validation (D17): quantity exceeds the instrument's maximum
+    /// permitted quantity for a single order (or is non-positive). Venue-
+    /// neutral name: MCX calls this "maximum single transaction quantity",
+    /// NSE/BSE call it "freeze quantity" -- see `types::Instrument`.
+    MaxSingleOrderQty,
     /// RMS (D34) said no. Phase 1's RMS always says yes, so this variant
     /// is unreachable today but must exist so a real RMS slots in later
     /// without changing this enum's shape.
@@ -173,7 +175,7 @@ impl fmt::Display for DenyReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             DenyReason::TickSize => "TICK_SIZE",
-            DenyReason::FreezeQty => "FREEZE_QTY",
+            DenyReason::MaxSingleOrderQty => "FREEZE_QTY",
             DenyReason::RmsRejected => "RMS_REJECTED",
             DenyReason::LocalOtrOrRate => "LOCAL_OTR_OR_RATE",
             DenyReason::UnknownInstrument => "UNKNOWN_INSTRUMENT",
@@ -338,21 +340,21 @@ fn order_type_price(ot: OrderType) -> Option<Price> {
 }
 
 /// Order Validation (D17): stateless reference-data checking -- tick size
-/// and freeze quantity, exactly what FR-B27 names as in scope for phase
+/// and max single order quantity, exactly what FR-B27 names as in scope for phase
 /// 1. Distinct from RMS (stateful policy) and from the venue's own
 /// checks (D36).
 ///
-/// `instrument.freeze_qty` is compared directly against `intent.qty`
-/// (`Lots`) -- a real trading-limits concept like freeze quantity is
+/// `instrument.max_single_order_qty` is compared directly against `intent.qty`
+/// (`Lots`) -- a real trading-limits concept like a max order quantity is
 /// naturally expressed in lots, not wire-raw units, so now that
 /// `NewOrderIntent.qty` is itself `Lots` this comparison is finally in
-/// the right unit space. `freeze_qty` is still always `0` from
+/// the right unit space. `max_single_order_qty` is still always `0` from
 /// `refdata`'s own documented stub (no source column exists yet) -- a
 /// separate, pre-existing data-completeness gap, not a units bug; see
 /// `refdata_user_doc.md` §4.
 fn validate(instrument: &Instrument, intent: &NewOrderIntent) -> Result<(), DenyReason> {
-    if intent.qty.0 <= 0 || intent.qty.0 > instrument.freeze_qty {
-        return Err(DenyReason::FreezeQty);
+    if intent.qty.0 <= 0 || intent.qty.0 > instrument.max_single_order_qty {
+        return Err(DenyReason::MaxSingleOrderQty);
     }
     if let Some(price) = order_type_price(intent.order_type) {
         if instrument.tick_size.0 > 0 && price.0 % instrument.tick_size.0 != 0 {
@@ -1165,7 +1167,18 @@ impl ExecutionEngine {
                 resulting_state,
             });
         }
-        tracing::info!("{}", logging::line("ExecutionEngine", Some(now_ns), &format!("{resulting_state:?}"), &format!("client_order_id={client_order_id} {description}")));
+        // `venue_order_id` is `NA` until the venue has actually accepted
+        // this order and reported its own identity back (real MCX's
+        // `OrderID`, tag 37): a `Denied` order never reaches the venue at
+        // all, a `Rejected` one is refused before entering the book, and
+        // a `Submitted` line is emitted before the venue's answer has
+        // arrived -- so the id appearing on the *next* line for the same
+        // `client_order_id` is exactly the moment the venue assigned it.
+        let detail = match self.orders.get(&client_order_id).and_then(|o| o.venue_order_id) {
+            Some(venue_order_id) => format!("client_order_id={client_order_id} venue_order_id={venue_order_id} {description}"),
+            None => format!("client_order_id={client_order_id} venue_order_id=NA {description}"),
+        };
+        tracing::info!("{}", logging::line("ExecutionEngine", Some(now_ns), &format!("{resulting_state:?}"), &detail));
     }
 
     // ---- gates + submission (FR-B27, D36) ----
@@ -1306,7 +1319,18 @@ impl ExecutionEngine {
         };
         self.orders.insert(client_order_id, order);
         self.message_counts.denied += 1;
-        self.log_event(client_order_id, &format!("denied: {reason}"), OrderState::Denied, now_ns);
+        // Rendered in the *venue's own* vocabulary where one differs
+        // from qtrade's neutral internal name -- an operator reading a
+        // rejection should see the term their exchange's documentation
+        // uses (MCX says "maximum single transaction quantity"; NSE/BSE
+        // call the same thing "freeze quantity"). The enum variant and
+        // the `Instrument` field stay venue-neutral; only this label is
+        // venue-aware. See `types::Venue::max_single_order_qty_term`.
+        let label = match (reason, self.instruments.get(&intent.instrument)) {
+            (DenyReason::MaxSingleOrderQty, Some(inst)) => inst.venue.max_single_order_qty_term().to_string(),
+            _ => reason.to_string(),
+        };
+        self.log_event(client_order_id, &format!("denied: {label}"), OrderState::Denied, now_ns);
         // Deliberately nothing else happens here: no venue call of any
         // kind. This is what the acceptance test's call-counter check
         // confirms from outside.
@@ -1752,7 +1776,7 @@ mod tests {
     use super::*;
     use crate::types::{Currency, InstrumentKind, Settlement, Venue};
 
-    fn future_instrument(id: u32, tick_size: i64, freeze_qty: i64, multiplier: i64) -> Instrument {
+    fn future_instrument(id: u32, tick_size: i64, max_single_order_qty: i64, multiplier: i64) -> Instrument {
         Instrument {
             id: InstrumentId(id),
             venue: Venue::Mcx,
@@ -1766,7 +1790,7 @@ mod tests {
             tick_size: Price(tick_size),
             lot_size: 1,
             multiplier,
-            freeze_qty,
+            max_single_order_qty,
             price_band: None,
             currency: Currency::Inr,
         }
@@ -1898,11 +1922,11 @@ mod tests {
     }
 
     #[test]
-    fn freeze_qty_violation_is_denied_locally_and_never_reaches_the_venue() {
+    fn max_single_order_qty_violation_is_denied_locally_and_never_reaches_the_venue() {
         let (mut eng, mut venue) = engine(vec![future_instrument(1, 10, 50, 1)]);
         let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(51) };
         let (outcome, _) = submit_order_sync(&mut eng, &mut venue, intent, 0);
-        assert!(matches!(outcome, GateOutcome::Denied { reason: DenyReason::FreezeQty, .. }));
+        assert!(matches!(outcome, GateOutcome::Denied { reason: DenyReason::MaxSingleOrderQty, .. }));
         assert_eq!(eng.venue_submit_calls(), 0);
     }
 

@@ -44,7 +44,7 @@ use types::{Currency, Date, Instrument, InstrumentId, InstrumentKind, Lots, Pric
 
 const IID: InstrumentId = InstrumentId(1);
 
-fn future_instrument(id: u32, tick_size: i64, freeze_qty: i64) -> Instrument {
+fn future_instrument(id: u32, tick_size: i64, max_single_order_qty: i64) -> Instrument {
     Instrument {
         id: InstrumentId(id),
         venue: Venue::Mcx,
@@ -53,7 +53,7 @@ fn future_instrument(id: u32, tick_size: i64, freeze_qty: i64) -> Instrument {
         tick_size: Price(tick_size),
         lot_size: 1,
         multiplier: 1,
-        freeze_qty,
+        max_single_order_qty,
         price_band: None,
         currency: Currency::Inr,
     }
@@ -157,8 +157,8 @@ fn main() -> ExitCode {
         let (mut eng2, mut venue2) = engine(7, future_instrument(1, 10, 50));
         let intent2 = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(51) };
         let (outcome2, _) = submit_order_sync(&mut eng2, &mut venue2, intent2, 0);
-        println!("  freeze-qty violation (qty=51, freeze_qty=50): outcome={outcome2:?}, venue_submit_calls={}", eng2.venue_submit_calls());
-        let ok_freeze = matches!(outcome2, GateOutcome::Denied { .. }) && eng2.venue_submit_calls() == 0;
+        println!("  max-single-order-qty violation (qty=51, max_single_order_qty=50): outcome={outcome2:?}, venue_submit_calls={}", eng2.venue_submit_calls());
+        let ok_max_qty = matches!(outcome2, GateOutcome::Denied { .. }) && eng2.venue_submit_calls() == 0;
 
         // Contrast: a BOC that would cross passes every local gate and
         // genuinely reaches the venue, which itself refuses it --
@@ -181,7 +181,7 @@ fn main() -> ExitCode {
             && matches!(order3.reject_reason, Some(RejectReason::WouldCross))
             && order3.deny_reason.is_none();
 
-        if ok_tick && ok_freeze && ok_reject {
+        if ok_tick && ok_max_qty && ok_reject {
             println!("  PASS: local Denied never reaches the venue; venue Rejected is a genuinely different, later, path");
         } else {
             eprintln!("  FAIL: local/venue rejection paths not distinct as required");

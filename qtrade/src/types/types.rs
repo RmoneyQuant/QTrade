@@ -151,6 +151,20 @@ pub enum Venue {
     Mcx,
 }
 
+impl Venue {
+    /// This venue's own name for `Instrument::max_single_order_qty` --
+    /// used when rendering a rejection so logs speak the vocabulary of
+    /// whichever exchange the order was actually bound for, while the
+    /// field and enum names stay venue-neutral. See that field's own doc
+    /// comment for the full cross-venue table and sources.
+    pub fn max_single_order_qty_term(&self) -> &'static str {
+        match self {
+            // Official MCX terminology, not NSE's "freeze quantity".
+            Venue::Mcx => "MAX_SINGLE_TXN_QTY",
+        }
+    }
+}
+
 impl fmt::Display for Venue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -232,7 +246,25 @@ pub struct Instrument {
     pub tick_size: Price,
     pub lot_size: i64,
     pub multiplier: i64,
-    pub freeze_qty: i64,
+    /// The largest quantity (in **lots**) permitted on a *single* order
+    /// for this instrument. `0` means "unknown" -- the gate in
+    /// `execution::validate` treats it as such.
+    ///
+    /// **Deliberately venue-neutral naming.** Every exchange has this
+    /// concept and every exchange names it differently; qtrade's internal
+    /// vocabulary belongs to no single venue (D32: "nothing venue-shaped
+    /// survives this boundary"). The mapping, for anyone reading an
+    /// exchange's own documentation:
+    ///
+    /// | Venue    | That venue's own term for this field                |
+    /// |----------|-----------------------------------------------------|
+    /// | MCX      | **Maximum single transaction quantity** (`MCXScrips.bcp` col 71; spec: *MCX Reference Data Files (Masters) v1.2*, circular MCX/CTCL/123/2026) |
+    /// | NSE, BSE | **Freeze quantity**                                 |
+    ///
+    /// Logs render the *venue's own* term rather than this field name --
+    /// see `Venue::max_single_order_qty_term`, so an operator reading a
+    /// rejection sees the words their exchange's documentation uses.
+    pub max_single_order_qty: i64,
     pub price_band: Option<(Price, Price)>,
     pub currency: Currency,
 }

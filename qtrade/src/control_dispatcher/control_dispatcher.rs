@@ -157,7 +157,7 @@ mod tests {
             tick_size: Price(RUPEE_RAW),
             lot_size: 1,
             multiplier: 1,
-            freeze_qty: 0,
+            max_single_order_qty: 0,
             price_band: None,
             currency: Currency::Inr,
         }]);
@@ -212,7 +212,7 @@ mod tests {
             tick_size: Price(1),
             lot_size: 1,
             multiplier: 1,
-            freeze_qty: 1000,
+            max_single_order_qty: 1000,
             price_band: None,
             currency: crate::types::Currency::Inr,
         }

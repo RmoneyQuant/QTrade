@@ -33,3 +33,6 @@ npm-debug.log*
 
 # large capture files not meant for git
 references/cme_feeder_27_08_2026.bin
+
+# generated .bcp inspection reports (references/inspect_bcp.py)
+references/bcp_report_*.txt
