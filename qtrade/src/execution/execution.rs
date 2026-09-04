@@ -43,7 +43,7 @@
 //! person actually reads: `OrderState`, `DenyReason`, `CancelReason`,
 //! and the Tier 1 report itself.
 
-use crate::decoder::DecodedMessage;
+use crate::decoder::{self, DecodedMessage};
 use crate::logging;
 use crate::simulator::{self, CancelReason as VenueCancelReason, ExecReport, FillKind, NewOrderRequest, OrderType, OtrConfig, RejectReason, SimExchange};
 use crate::types::{Instrument, InstrumentId, Lots, Price, Qty, Side};
@@ -258,6 +258,19 @@ pub struct Order {
     /// execution_user_doc.md's reporting section.
     pub spread_improving: bool,
     pre_submit_best_same_side: Option<Price>,
+    /// **Own-order injection (2026-09-03).** `Some((price, priority_ts))`
+    /// exactly while this order currently has a resting presence
+    /// injected into the same message stream `cache` reads from --
+    /// `priority_ts` is `ExecReport::Resting`'s own `handle.priority_ts`
+    /// (`simulator`'s `sim_id`, see `simulator::SIM_ID_BASE`), reused
+    /// as-is rather than minting a second identity: it already carries
+    /// the right priority semantics (unchanged across a same-price
+    /// qty-only modify, fresh across a price change or qty increase).
+    /// `None` before the order ever rests, and again once it's fully
+    /// filled or canceled. See `push_resting_injection`/`on_fill`/the
+    /// `Canceled` arm of `handle_exec_reports`, and
+    /// `execution_user_doc.md`'s own-order-injection section.
+    cache_injected_at: Option<(Price, u64)>,
 }
 
 // =======================================================================
@@ -336,6 +349,19 @@ fn order_type_price(ot: OrderType) -> Option<Price> {
     match ot {
         OrderType::LimitDay(p) | OrderType::BookOrCancel(p) | OrderType::Ioc(p) => Some(p),
         OrderType::MarketToLimit => None,
+    }
+}
+
+/// `types::Side` -> `decoder::Side`, the reverse of `book`/`simulator`'s
+/// own (private) `conv_side` -- needed here because an injected message
+/// (2026-09-03, own-order injection) starts from *our* side, in *our*
+/// type, not from a decoded wire byte. Always `Buy`/`Sell`: we always
+/// know our own order's side, unlike `decoder::Side::Unknown(_)`, which
+/// only exists for a real wire value this crate doesn't recognise.
+fn conv_side_to_decoder(side: Side) -> decoder::Side {
+    match side {
+        Side::Buy => decoder::Side::Buy,
+        Side::Sell => decoder::Side::Sell,
     }
 }
 
@@ -1060,6 +1086,19 @@ pub struct ExecutionEngine {
     order_events: Vec<OrderEventRecord>,
     markout_horizons_ns: Vec<u64>,
     run_config: RunConfig,
+    /// **Own-order injection (2026-09-03).** Every `DecodedMessage` this
+    /// engine has synthesized from one of our own `ExecReport`s since the
+    /// last drain, paired with the `now_ns` it happened at -- an outbox,
+    /// same idiom `main.rs`'s own `sync_venue_alarms` already uses for
+    /// `SimExchange`'s pending alarms. `main.rs` drains it via
+    /// `take_pending_cache_injections` right after every `dispatch_event`
+    /// call and schedules each one toward `Target::Cache`, so `cache`'s
+    /// book -- and therefore a strategy reading it -- learns about our
+    /// own resting orders and fills the same way it learns about anyone
+    /// else's: from the tape, not from a side channel. See
+    /// `push_resting_injection`/`on_fill`/the `Canceled` arm of
+    /// `handle_exec_reports`, and `execution_user_doc.md`.
+    pending_cache_injections: Vec<(u64, DecodedMessage)>,
 }
 
 impl ExecutionEngine {
@@ -1095,6 +1134,7 @@ impl ExecutionEngine {
             order_events: Vec::new(),
             markout_horizons_ns,
             run_config,
+            pending_cache_injections: Vec::new(),
         }
     }
 
@@ -1133,6 +1173,15 @@ impl ExecutionEngine {
 
     pub fn order_events(&self) -> &[OrderEventRecord] {
         &self.order_events
+    }
+
+    /// Drains this engine's own-order-injection outbox -- see
+    /// `pending_cache_injections`'s own doc comment. Called by `main.rs`
+    /// right after every `dispatch_event`; empty on every call in
+    /// between (nothing here to see until the next `ExecReport` produces
+    /// one).
+    pub fn take_pending_cache_injections(&mut self) -> Vec<(u64, DecodedMessage)> {
+        std::mem::take(&mut self.pending_cache_injections)
     }
 
     pub fn cost_model(&self) -> &CostModel {
@@ -1273,6 +1322,7 @@ impl ExecutionEngine {
             cancel_reason: None,
             spread_improving: false,
             pre_submit_best_same_side,
+            cache_injected_at: None,
         };
         self.orders.insert(client_order_id, order);
         self.log_event(client_order_id, "submit: gates passed, forwarding to venue", OrderState::Submitted, now_ns);
@@ -1316,6 +1366,7 @@ impl ExecutionEngine {
             cancel_reason: None,
             spread_improving: false,
             pre_submit_best_same_side: None,
+            cache_injected_at: None,
         };
         self.orders.insert(client_order_id, order);
         self.message_counts.denied += 1;
@@ -1529,6 +1580,103 @@ impl ExecutionEngine {
         }
     }
 
+    // ---- own-order injection (2026-09-03) -- publishing our own
+    // ---- order's resting presence and fills into the same message
+    // ---- stream `cache` reads, so a strategy's own queue-position reads
+    // ---- come from reading the book (backtest and, eventually, live
+    // ---- alike), not from a side channel only SimExchange knows about.
+    // ---- See `Order::cache_injected_at`'s and
+    // ---- `pending_cache_injections`'s own doc comments, and
+    // ---- execution_user_doc.md. Every method below only *builds and
+    // ---- queues* a `DecodedMessage` -- `SimExchange`'s own book (the
+    // ---- one that actually decides fills, D10) is never touched from
+    // ---- here, same independence Phase 1 (`simulator.rs`, same day)
+    // ---- gave the *replay's* book against our own trading.
+
+    /// A brand-new resting slot: `handle.priority_ts` had no prior
+    /// `cache_injected_at` entry for this order.
+    fn injected_order_add(&mut self, instrument: InstrumentId, side: Side, price: Price, qty: Qty, priority_ts: u64, now_ns: u64) {
+        self.pending_cache_injections.push((
+            now_ns,
+            DecodedMessage::OrderAdd(decoder::OrderAdd {
+                seq: 0,
+                security_id: instrument.0 as i64,
+                side: conv_side_to_decoder(side),
+                price: decoder::Price(price.0),
+                qty: decoder::Qty(qty.0),
+                priority_ts,
+                event_time: now_ns,
+            }),
+        ));
+    }
+
+    /// The slot's identity (`priority_ts`) is unchanged from before --
+    /// same FIFO position, only the resting quantity moved (a quantity-
+    /// only modify, or the remainder after one of our own fills).
+    /// `prev_qty` is purely informational: `book::MboBookImpl::apply`
+    /// (like `simulator`'s own re-implementation) recomputes the level's
+    /// quantity delta from the slot's own stored `qty`, never from this
+    /// message field -- confirmed against both independent
+    /// implementations, not assumed.
+    fn injected_qty_change(&mut self, instrument: InstrumentId, side: Side, price: Price, prev_qty: Qty, new_qty: Qty, priority_ts: u64, now_ns: u64) {
+        self.pending_cache_injections.push((
+            now_ns,
+            DecodedMessage::OrderModifySamePriority(decoder::OrderModifySamePriority {
+                seq: 0,
+                security_id: instrument.0 as i64,
+                side: conv_side_to_decoder(side),
+                prev_qty: decoder::Qty(prev_qty.0),
+                qty: decoder::Qty(new_qty.0),
+                price: decoder::Price(price.0),
+                priority_ts,
+                event_time: now_ns,
+            }),
+        ));
+    }
+
+    /// The slot's identity is gone for good: fully filled, canceled, or
+    /// replaced by a fresh identity after a price-changing/qty-increasing
+    /// modify (paired with an `injected_order_add` for the new one, in
+    /// that order -- `book`'s `remove_order` never confuses a stale
+    /// identity for a live one, but scheduling Delete-then-Add still
+    /// mirrors real `OrderModify`'s own "old identity removed entirely,
+    /// fresh one added at the back" wording).
+    fn injected_order_delete(&mut self, instrument: InstrumentId, side: Side, price: Price, priority_ts: u64, now_ns: u64) {
+        self.pending_cache_injections.push((
+            now_ns,
+            DecodedMessage::OrderDelete(decoder::OrderDelete {
+                seq: 0,
+                security_id: instrument.0 as i64,
+                side: conv_side_to_decoder(side),
+                price: decoder::Price(price.0),
+                qty: decoder::Qty(0), // unread by `remove_order` -- identified by (side, price, priority_ts) alone, see `injected_qty_change`'s doc comment on `prev_qty`
+                priority_ts,
+                event_time: now_ns,
+            }),
+        ));
+    }
+
+    /// Called from the `Resting` arm of `handle_exec_reports`, with
+    /// `prev` (identity) and `prev_leaves_qty` both captured from
+    /// *before* `order`'s own fields are updated for this report --
+    /// decides the right injected message(s) by comparing this report's
+    /// `handle.priority_ts` against whatever identity (if any) was
+    /// injected last: unchanged -> a quantity change on the same slot;
+    /// changed -> the old slot is gone, a new one takes its place;
+    /// `None` -> this order has never rested before.
+    fn push_resting_injection(&mut self, instrument: InstrumentId, side: Side, price: Price, qty: Qty, priority_ts: u64, prev: Option<(Price, u64)>, prev_leaves_qty: Qty, now_ns: u64) {
+        match prev {
+            None => self.injected_order_add(instrument, side, price, qty, priority_ts, now_ns),
+            Some((_, prev_pts)) if prev_pts == priority_ts => {
+                self.injected_qty_change(instrument, side, price, prev_leaves_qty, qty, priority_ts, now_ns);
+            }
+            Some((prev_price, prev_pts)) => {
+                self.injected_order_delete(instrument, side, prev_price, prev_pts, now_ns);
+                self.injected_order_add(instrument, side, price, qty, priority_ts, now_ns);
+            }
+        }
+    }
+
     // ---- exec report handling -- the single place all of Rejected/
     // ---- Resting/Filled/Canceled are turned into state transitions,
     // ---- accounting, and fill records ----
@@ -1567,6 +1715,13 @@ impl ExecutionEngine {
                     // emitted `OrderEventRecord` reflects the real state
                     // rather than a hardcoded `Accepted`.
                     let mut logged_state = OrderState::Accepted;
+                    // Captured only when this report actually changes the
+                    // order's resting state below -- what
+                    // `push_resting_injection` needs, gathered here since
+                    // it can't be called while `order`'s own mutable
+                    // borrow is still live (own-order injection,
+                    // 2026-09-03).
+                    let mut injection: Option<(InstrumentId, Side, Option<(Price, u64)>, Qty)> = None;
                     if let Some(order) = self.orders.get_mut(&client_order_id) {
                         // Recorded regardless of terminal state below --
                         // this is the venue's own order identity (real
@@ -1575,6 +1730,8 @@ impl ExecutionEngine {
                         // even for an order a race has already resolved.
                         order.venue_order_id = Some(venue_order_id);
                         if !order.state.is_terminal() {
+                            let prev_injected_at = order.cache_injected_at;
+                            let prev_leaves_qty = order.leaves_qty;
                             order.leaves_qty = qty;
                             order.working_price = Some(handle.price);
                             let pre = order.pre_submit_best_same_side;
@@ -1585,7 +1742,12 @@ impl ExecutionEngine {
                             };
                             order.state = if order.filled_qty.0 > 0 { OrderState::PartiallyFilled } else { OrderState::Accepted };
                             logged_state = order.state;
+                            order.cache_injected_at = Some((handle.price, handle.priority_ts));
+                            injection = Some((order.instrument, order.side, prev_injected_at, prev_leaves_qty));
                         }
+                    }
+                    if let Some((instrument, side, prev_injected_at, prev_leaves_qty)) = injection {
+                        self.push_resting_injection(instrument, side, handle.price, qty, handle.priority_ts, prev_injected_at, prev_leaves_qty, now_ns);
                     }
                     let desc = if logged_state == OrderState::PartiallyFilled { "remainder working after partial fill" } else { "resting" };
                     self.log_event(client_order_id, desc, logged_state, now_ns);
@@ -1594,6 +1756,7 @@ impl ExecutionEngine {
                     self.on_fill(client_order_id, venue_order_id, price, qty, kind, now_ns);
                 }
                 ExecReport::Canceled { client_order_id, reason } => {
+                    let mut injection: Option<(InstrumentId, Side, Price, u64)> = None;
                     if let Some(order) = self.orders.get_mut(&client_order_id) {
                         // The race: never regress an order that is
                         // already terminal (in particular `Filled`, via
@@ -1604,7 +1767,17 @@ impl ExecutionEngine {
                             order.state = OrderState::Canceled;
                             order.cancel_reason = Some(map_cancel_reason(reason));
                             self.pre_event_qty_ahead.remove(&client_order_id);
+                            // Own-order injection (2026-09-03): the slot
+                            // we published earlier, if any, is gone for
+                            // good -- tell `cache` the same way a real
+                            // cancel would.
+                            if let Some((price, priority_ts)) = order.cache_injected_at.take() {
+                                injection = Some((order.instrument, order.side, price, priority_ts));
+                            }
                         }
+                    }
+                    if let Some((instrument, side, price, priority_ts)) = injection {
+                        self.injected_order_delete(instrument, side, price, priority_ts, now_ns);
                     }
                     self.log_event(client_order_id, &format!("canceled: {reason:?}"), OrderState::Canceled, now_ns);
                 }
@@ -1635,8 +1808,15 @@ impl ExecutionEngine {
         // implies a prior submit, so this branch is not expected).
         let mut logged_state = OrderState::Filled;
         let mut leaves_qty = 0i64;
+        // Own-order injection (2026-09-03): populated below only if this
+        // fill touches a slot we'd previously published to `cache` --
+        // deferred to after `order`'s own borrow ends, same reason
+        // `push_resting_injection` is deferred in the `Resting` arm.
+        let mut delete_slot: Option<(InstrumentId, Side, Price, u64)> = None;
+        let mut shrink_slot: Option<(InstrumentId, Side, Price, Qty, Qty, u64)> = None;
         if let Some(order) = self.orders.get_mut(&client_order_id) {
             order.venue_order_id = Some(venue_order_id);
+            let prev_leaves_qty = order.leaves_qty;
             order.filled_qty = Qty(order.filled_qty.0 + qty.0);
             order.leaves_qty = Qty((order.requested_qty.0 - order.filled_qty.0).max(0));
             // The race, made concrete: this assignment happens
@@ -1645,6 +1825,22 @@ impl ExecutionEngine {
             order.state = if order.leaves_qty.0 <= 0 { OrderState::Filled } else { OrderState::PartiallyFilled };
             logged_state = order.state;
             leaves_qty = order.leaves_qty.0;
+            // A fill against a slot we'd never published (a pure
+            // marketable fill against *real* liquidity, `cache_injected_at
+            // == None`) needs no injection at all -- consistent with
+            // Phase 1's "no market impact": the replay's own book already
+            // reflects that real liquidity untouched, same as before.
+            if let Some((inj_price, inj_pts)) = order.cache_injected_at {
+                if order.state == OrderState::Filled {
+                    delete_slot = Some((order.instrument, order.side, inj_price, inj_pts));
+                    order.cache_injected_at = None;
+                } else {
+                    shrink_slot = Some((order.instrument, order.side, inj_price, prev_leaves_qty, order.leaves_qty, inj_pts));
+                    // Identity and price are unchanged -- only the
+                    // resting quantity shrank -- so `cache_injected_at`
+                    // itself stays exactly as it was.
+                }
+            }
             if order.state == OrderState::Filled {
                 // Order is done -- drop its sticky queue-position entry
                 // now rather than let it accumulate for the life of the
@@ -1652,6 +1848,12 @@ impl ExecutionEngine {
                 // entry would otherwise sit unread forever).
                 self.pre_event_qty_ahead.remove(&client_order_id);
             }
+        }
+        if let Some((instrument, side, price, priority_ts)) = delete_slot {
+            self.injected_order_delete(instrument, side, price, priority_ts, now_ns);
+        }
+        if let Some((instrument, side, price, prev_qty, new_qty, priority_ts)) = shrink_slot {
+            self.injected_qty_change(instrument, side, price, prev_qty, new_qty, priority_ts, now_ns);
         }
 
         let fill_id = self.next_fill_id;
@@ -2305,5 +2507,263 @@ mod tests {
         // Sold at 150; mid moved to 151 (against us: -1) then 148 (favourable: +2).
         assert_eq!(fill.markouts[0], (1_000_000, Some(-1)));
         assert_eq!(fill.markouts[1], (5_000_000, Some(2)));
+    }
+
+    // ---- own-order injection (2026-09-03) -- our own resting orders,
+    // ---- fills, and cancels published into the same message stream
+    // ---- `cache` reads, so a strategy reading `cache`'s book sees them
+    // ---- too, not just `SimExchange`'s own internal bookkeeping. ----
+
+    fn only_injection(eng: &mut ExecutionEngine) -> DecodedMessage {
+        let mut injections = eng.take_pending_cache_injections();
+        assert_eq!(injections.len(), 1, "expected exactly one injected message: {injections:?}");
+        injections.remove(0).1
+    }
+
+    #[test]
+    fn a_resting_order_injects_an_order_add_matching_its_own_fields() {
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(5) };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 42) else { panic!() };
+        assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Accepted, "no real liquidity to cross -- rests outright");
+        let requested_raw = eng.order(client_order_id).unwrap().requested_qty.0;
+
+        match only_injection(&mut eng) {
+            DecodedMessage::OrderAdd(o) => {
+                assert_eq!(o.security_id, 1);
+                assert_eq!(o.side, crate::decoder::Side::Buy);
+                assert_eq!(o.price.0, 100);
+                assert_eq!(o.qty.0, requested_raw);
+                assert_eq!(o.event_time, 42, "carries `now_ns`, same as every other timestamp on this call");
+                assert!(o.priority_ts >= simulator::SIM_ID_BASE, "must live in the collision-free range no real priority_ts can ever reach");
+                assert_eq!(Some((Price(100), o.priority_ts)), eng.order(client_order_id).unwrap().cache_injected_at, "the engine's own record of what it published must match what was actually queued");
+            }
+            other => panic!("expected OrderAdd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_pure_aggressive_fill_with_no_prior_rest_injects_nothing() {
+        // Real liquidity resting first, then we take it outright with an
+        // IOC that fully fills on arrival -- never rests, so `cache`
+        // never needed to hear about it: Phase 1's "no market impact"
+        // already keeps the replay's own book correct for this case.
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let want_raw = Lots(10).to_raw_qty().0;
+        // Real resting liquidity sized to exactly match our own IOC's raw
+        // quantity, so the whole order fills on arrival with nothing left
+        // for IOC's own remainder-cancel path to touch.
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::OrderAdd(crate::decoder::OrderAdd { seq: 0, security_id: 1, side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(want_raw), priority_ts: 1, event_time: 0 }), 0);
+        eng.take_pending_cache_injections(); // drain the real OrderAdd's own accounting no-op (none expected, but keep the outbox clean regardless)
+        let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::Ioc(Price(150)), qty: Lots(10) };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!() };
+        assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Filled, "must fully fill -- nothing left over to exercise IOC's own remainder-cancel path instead");
+        assert!(eng.take_pending_cache_injections().is_empty(), "a pure aggressive fill against real liquidity never had an injected slot to begin with");
+    }
+
+    #[test]
+    fn a_same_price_qty_only_modify_injects_a_qty_change_on_the_same_slot() {
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(10) };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!() };
+        let original_pts = match only_injection(&mut eng) {
+            DecodedMessage::OrderAdd(o) => o.priority_ts,
+            other => panic!("expected OrderAdd, got {other:?}"),
+        };
+
+        eng.deliver_modify_to_venue(client_order_id, Qty(3), None, 10, &mut venue);
+        match only_injection(&mut eng) {
+            DecodedMessage::OrderModifySamePriority(m) => {
+                assert_eq!(m.priority_ts, original_pts, "same FIFO slot -- quantity-only, priority retained, matching real MCX's own 13106 semantics");
+                assert_eq!(m.price.0, 100);
+                assert_eq!(m.qty.0, 3);
+            }
+            other => panic!("expected OrderModifySamePriority, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_price_changing_modify_injects_a_delete_of_the_old_slot_then_a_fresh_add() {
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(10) };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!() };
+        let requested_raw = eng.order(client_order_id).unwrap().requested_qty.0;
+        let original_pts = match only_injection(&mut eng) {
+            DecodedMessage::OrderAdd(o) => o.priority_ts,
+            other => panic!("expected OrderAdd, got {other:?}"),
+        };
+
+        eng.deliver_modify_to_venue(client_order_id, Qty(requested_raw), Some(Price(95)), 10, &mut venue);
+        let injections = eng.take_pending_cache_injections();
+        assert_eq!(injections.len(), 2, "old identity removed entirely, a fresh one added at the back -- same wording as real MCX's own OrderModify(13101): {injections:?}");
+        match &injections[0].1 {
+            DecodedMessage::OrderDelete(d) => {
+                assert_eq!(d.priority_ts, original_pts);
+                assert_eq!(d.price.0, 100, "deletes the *old* price's slot");
+            }
+            other => panic!("expected OrderDelete first, got {other:?}"),
+        }
+        match &injections[1].1 {
+            DecodedMessage::OrderAdd(a) => {
+                assert_ne!(a.priority_ts, original_pts, "a fresh identity -- real MCX loses priority on a price change too");
+                assert_eq!(a.price.0, 95);
+                assert_eq!(a.qty.0, requested_raw);
+            }
+            other => panic!("expected OrderAdd second, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_full_fill_of_a_resting_order_deletes_its_injected_slot() {
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::OrderAdd(crate::decoder::OrderAdd { seq: 0, security_id: 1, side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(10), priority_ts: 1, event_time: 0 }), 0);
+        let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(150)), qty: Lots(10) };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!() };
+        let requested_raw = eng.order(client_order_id).unwrap().requested_qty.0;
+        let original_pts = match only_injection(&mut eng) {
+            DecodedMessage::OrderAdd(o) => o.priority_ts,
+            other => panic!("expected OrderAdd, got {other:?}"),
+        };
+
+        // Real order ahead of us (10 raw) fully consumed, then a second
+        // real trade of exactly our own remaining raw quantity fills us
+        // completely.
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::Trade(crate::decoder::Trade { seq: 1, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(10), event_time: 1 }), 5);
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::Trade(crate::decoder::Trade { seq: 2, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(requested_raw), event_time: 999_999 }), 6);
+
+        assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Filled);
+        match only_injection(&mut eng) {
+            DecodedMessage::OrderDelete(d) => {
+                assert_eq!(d.priority_ts, original_pts);
+                assert_eq!(d.price.0, 150);
+            }
+            other => panic!("expected OrderDelete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_canceled_resting_order_deletes_its_injected_slot() {
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::LimitDay(Price(100)), qty: Lots(10) };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!() };
+        let original_pts = match only_injection(&mut eng) {
+            DecodedMessage::OrderAdd(o) => o.priority_ts,
+            other => panic!("expected OrderAdd, got {other:?}"),
+        };
+
+        eng.deliver_cancel_to_venue(client_order_id, 10, &mut venue);
+        assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::Canceled);
+        match only_injection(&mut eng) {
+            DecodedMessage::OrderDelete(d) => {
+                assert_eq!(d.priority_ts, original_pts);
+                assert_eq!(d.price.0, 100);
+            }
+            other => panic!("expected OrderDelete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn passive_partial_fill_shrinks_the_injected_slot_in_place_rather_than_removing_it() {
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::OrderAdd(crate::decoder::OrderAdd { seq: 0, security_id: 1, side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(10), priority_ts: 1, event_time: 0 }), 0);
+        let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(150)), qty: Lots(10) };
+        let (GateOutcome::Submitted { client_order_id }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!() };
+        let requested_raw = eng.order(client_order_id).unwrap().requested_qty.0;
+        let original_pts = match only_injection(&mut eng) {
+            DecodedMessage::OrderAdd(o) => o.priority_ts,
+            other => panic!("expected OrderAdd, got {other:?}"),
+        };
+
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::Trade(crate::decoder::Trade { seq: 1, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(10), event_time: 1 }), 5);
+        let half = requested_raw / 2;
+        assert!(half > 0, "test needs a genuine partial -- requested_raw too small");
+        on_market_event_sync(&mut eng, &mut venue, &DecodedMessage::Trade(crate::decoder::Trade { seq: 2, full: false, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(half), event_time: 999_999 }), 6);
+
+        assert_eq!(eng.order(client_order_id).unwrap().state, OrderState::PartiallyFilled);
+        match only_injection(&mut eng) {
+            DecodedMessage::OrderModifySamePriority(m) => {
+                assert_eq!(m.priority_ts, original_pts, "the fill shrinks the same slot -- it does not remove/replace it");
+                assert_eq!(m.price.0, 150);
+                assert_eq!(m.qty.0, requested_raw - half);
+            }
+            other => panic!("expected OrderModifySamePriority, got {other:?}"),
+        }
+    }
+
+    /// The end-to-end point of own-order injection, not just the message
+    /// shapes above: feed *only* what `ExecutionEngine` actually queues
+    /// into a real `book::BookBuilder` -- the exact type `cache::Cache`
+    /// wraps -- with no special-casing on the receiving end, and confirm
+    /// it genuinely answers `queue_position` for our own order, and for
+    /// a *real* order arriving after ours (proving our presence is
+    /// visible to everyone reading the book, not just to us). Uses only
+    /// precisely-targeted real trades (`event_time` == a specific
+    /// resting `priority_ts`) -- deliberately not the fallback-cascade
+    /// path (`event_time` matching nothing resting, as
+    /// `queue_position_and_markout_fields_exist_on_every_fill_from_creation`
+    /// uses to target *our* slot in `SimExchange`'s own independent
+    /// book): that path can, since our own order now shares one FIFO
+    /// with real orders here, walk into a slot that happens to be ours
+    /// even though nothing about *that specific* real trade named it --
+    /// a known, accepted edge case (rare: real MCX execution reports
+    /// reliably name their own counterparty's `priority_ts`, per D21
+    /// finding #3) documented in `execution_user_doc.md`, not exercised
+    /// by this test.
+    #[test]
+    fn injected_messages_feed_a_real_book_builder_and_answer_queue_position_correctly() {
+        use crate::book::{BookBuilder, MboBook};
+        use crate::types::OrderHandle;
+
+        let (mut eng, mut venue) = engine(vec![future_instrument(1, 1, 1000, 1)]);
+        let mut books = BookBuilder::new(&[(IID, 1)]);
+        books.seed_band(IID, 0, 10_000);
+
+        // Real resting sell order ahead of us -- fed to both SimExchange
+        // and this stand-in for cache's own book, same dual schedule
+        // `main.rs` already runs for every real message.
+        let real_add = DecodedMessage::OrderAdd(crate::decoder::OrderAdd { seq: 0, security_id: 1, side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(20), priority_ts: 1, event_time: 0 });
+        on_market_event_sync(&mut eng, &mut venue, &real_add, 0);
+        books.apply(&real_add);
+        eng.take_pending_cache_injections();
+
+        // Our own order rests behind it.
+        let intent = NewOrderIntent { strategy_id: 1, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(150)), qty: Lots(5) };
+        let (GateOutcome::Submitted { .. }, _) = submit_order_sync(&mut eng, &mut venue, intent, 0) else { panic!() };
+        let injections = eng.take_pending_cache_injections();
+        assert_eq!(injections.len(), 1);
+        let priority_ts = match &injections[0].1 {
+            DecodedMessage::OrderAdd(o) => o.priority_ts,
+            other => panic!("expected OrderAdd, got {other:?}"),
+        };
+        for (_, msg) in &injections {
+            books.apply(msg);
+        }
+
+        let our_handle = OrderHandle { instrument: IID, side: Side::Sell, price: Price(150), priority_ts };
+        assert_eq!(
+            books.get_impl(IID).unwrap().queue_position(our_handle),
+            Some(20),
+            "cache's own book -- fed *only* the injected message, nothing special-cased on the receiving end -- sees our own order and correctly reports the real order genuinely ahead of it"
+        );
+
+        // A real order arriving after ours must correctly count our own
+        // (injected) resting quantity as ahead of it.
+        let real_add_2 = DecodedMessage::OrderAdd(crate::decoder::OrderAdd { seq: 0, security_id: 1, side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(7), priority_ts: 2, event_time: 0 });
+        books.apply(&real_add_2);
+        let real_handle_2 = OrderHandle { instrument: IID, side: Side::Sell, price: Price(150), priority_ts: 2 };
+        assert_eq!(
+            books.get_impl(IID).unwrap().queue_position(real_handle_2),
+            Some(20 + Lots(5).to_raw_qty().0),
+            "a real order arriving after ours correctly counts our injected resting quantity as ahead of it too -- our presence is visible to anyone reading the book, not just to us"
+        );
+
+        // A real trade that precisely targets the real order ahead of us
+        // (priority_ts=1, an exact match -- never the ambiguous fallback
+        // path this test deliberately avoids) consumes it in full.
+        let t1 = DecodedMessage::Trade(crate::decoder::Trade { seq: 1, full: true, security_id: 1, aggressor_side: crate::decoder::Side::Sell, price: crate::decoder::Price(150), qty: crate::decoder::Qty(20), event_time: 1 });
+        on_market_event_sync(&mut eng, &mut venue, &t1, 5);
+        books.apply(&t1);
+        assert!(eng.take_pending_cache_injections().is_empty(), "a real trade against a real order never produces an injection of our own -- it never touched anything of ours");
+        assert_eq!(books.get_impl(IID).unwrap().queue_position(our_handle), Some(0), "the real order ahead of us is genuinely gone now -- we're at the front, exactly as SimExchange's own independent book would also say");
     }
 }

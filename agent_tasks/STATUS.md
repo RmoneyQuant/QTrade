@@ -108,6 +108,117 @@ Backtest-only, same as everything else in `feed_replay` / the `Scheduler`-driven
 
 Small correction found while building a throwaway `order_lifecycle_demo` strategy (deliberately walks an order through every reachable `OrderState`). `execution.rs` always tracked `order.state` correctly through a partial fill, but the two `log_event` calls that build the `OrderEventRecord` for `on_order_update` / `orders.log` each passed a **hardcoded literal**: the fill site emitted `OrderState::Filled`, the `Resting` site emitted `OrderState::Accepted` — so a partial fill surfaced to a strategy as `Filled` then `Accepted`, never `PartiallyFilled` (a strategy would read the first event as "whole order filled"; an `Accepted` after `Filled` reads as a terminal→non-terminal regression). Fixed: both sites capture `order.state` after updating it and pass that; unknown/already-terminal orders keep the old fallback. Descriptions clarified (`"partially filled qty=N kind=… (leaves=M)"` / `"remainder working after partial fill"`). Verified against real `21_08_2026` stream-4 data via the demo strategy (a ~900-lot touch-only `LimitDay` that fills ~81 lots and rests the rest — now emits `PartiallyFilled` twice); `cargo test --release` unchanged at **294 passing, 0 failed** (no test asserted the old hardcoded value). Docs: `execution_user_doc.md` §1, `strategy/order_lifecycle_demo/order_lifecycle_demo.md`. `main.rs` currently compiles `order_lifecycle_demo` in place of `multi_instrument_bracket` — a local demo swap, not committed.
 
+## Post-phase-1: `SimExchange` is now a fill estimator, not a matching engine, on the aggressive path (2026-09-03)
+
+Revises part of D21's accepted phase-1 approximation (leak #3, "you would
+have absorbed flow that historically went elsewhere"), not a bug fix: an
+aggressive fill (IOC / MarketToLimit / a marketable Limit) used to
+*physically* remove the swept quantity from the real resting order it
+matched — `simulator.rs`'s own book, independent of `cache` per D10, was
+nonetheless being genuinely mutated by our own trading, so every
+subsequent replayed event (a Delete, a Modify, a real Trade) touching
+that same order was interacting with a book state the recording never
+actually produced. The passive fill path (a real `Trade` message
+attributed to one of our resting orders) was already correct — it only
+ever credits a bounded fill, never rewrites the real trade.
+
+Fix, `simulator.rs` only: `SweptSlot`'s real-order leg is now read-only —
+`sweep_opposite` tracks what we've virtually taken per real order
+(`SimBookImpl::consumed_by_us`, keyed by the order's own `priority_ts`)
+instead of popping/decrementing its FIFO slot. `best_bid`/`best_ask`/
+`depth`/`qty_at_price` now always reflect the replay's ground truth,
+unperturbed by our own orders; `qty_ahead_of`/`MboBook::queue_position`
+net a real slot's quantity against `consumed_by_us` so a *different*
+resting order of ours behind that slot correctly sees less ahead of it.
+The ledger entry for a real order is dropped the moment that order's
+identity is genuinely gone (deleted, price-changed, fully traded, mass-
+deleted) — cheap hygiene, never load-bearing (`priority_ts` is never
+reused). Our own resting sim orders caught in a sweep (a mechanical
+self-trade, FR-B25/STP still out of scope) are unaffected — still
+genuinely mutated, since that's our own bookkeeping, not the recording's.
+
+Known, accepted residual leak, documented rather than hidden: nothing
+stops the same genuinely-resting real quantity from also being consumed
+by the historical tape's own future trades, since the recording plays
+out exactly as captured regardless of what we do (the "no market impact"
+assumption `simulator_user_doc.md` §8 now names explicitly). No
+participation cap or displacement model yet.
+
+Verified: `cargo test --release` — 4 new unit tests (real book depth
+untouched by our own aggressive fill; a second aggressive order can't
+re-claim liquidity we already virtually took; the ledger is forgotten
+once its real order is deleted, with no bleed onto an unrelated new order
+at the same price; a resting order of ours sees reduced `qty_ahead` for a
+real slot we'd already drawn down) — all existing tests pass unchanged,
+112 in the `qtrade` bin. Real-data re-run of `simulator-validate
+full-session` against the same file `simulator_user_doc.md` §7's original
+table used (`mcx_feeder_Increment_capture_19_01_2026_1_4.bin`, 114.4M
+records, 1.13M for CRUDEOIL): all 6 FR-B24 invariants still **PASS**,
+including 1b under the new per-slot accounting (6,381 aggressive fill
+legs, 0 violations) and #4 (10,063 qty-ahead observations, 0 violations).
+Raw counts differ from the historical §7 table (intervening feature work
+changed how much the harness's strategy trades) — reported as a separate
+entry, not overwriting it. Docs: `simulator_user_doc.md` §5, §6.1, §7,
+§8, this entry.
+
+## Post-phase-1: own-order injection -- `cache` learns about our own orders from the tape (2026-09-03, Phase 2 of the same day's SimExchange work)
+
+Closes the other half of the idea Phase 1 (above) opened: SimExchange
+is now a fill estimator that never mutates the replay's own book, but
+until this change `cache` -- and therefore a strategy reading
+`cache.book(id).queue_position(...)` -- had **no idea our own orders
+existed at all**. The only way to learn "how far ahead am I" was the
+`main.rs`-bridged `ExecutionEngine::prepare_for_market_event` /
+`SimExchange::resting_qty_ahead` side channel.
+
+Fix, `execution.rs` + `main.rs`, ~230 lines, no strategy-facing API
+change: every `ExecReport` that changes what our own order contributes to
+a book (`Resting`/`Filled`/`Canceled`) is converted into the same kind of
+`DecodedMessage` a real MCX order would produce (`OrderAdd`,
+`OrderModifySamePriority`, `OrderDelete`) and queued in a new
+`ExecutionEngine::pending_cache_injections` outbox. `main.rs` gained
+`drain_cache_injections`, called from the same two spots
+`sync_venue_alarms` already is, scheduling each queued message toward
+`Target::Cache` at `now` -- `cache`'s book applies it through the exact
+same `book::BookBuilder::apply` pipeline a real message uses, no
+special-casing. The identity used is `ExecReport::Resting`'s own
+`handle.priority_ts` (`simulator`'s `sim_id`, `simulator::SIM_ID_BASE`
+made `pub` for this) -- already collision-free against real
+`priority_ts` values, already carrying the right priority semantics
+(retained across a same-price qty-only modify, fresh across a price
+change or qty increase), so nothing new had to be minted. `Order` gained
+one field, `cache_injected_at: Option<(Price, u64)>`, tracking what's
+currently published so a resting/fill/cancel report can tell "first
+time", "same slot, smaller qty", and "identity moved" apart.
+
+One known, accepted edge case, documented not hidden: `book.rs`'s own
+fallback-cascade match (used when a real trade's `event_time` doesn't
+name a specific resting order -- rare, since real MCX execution reports
+reliably do per D21 finding #3) can now walk into *our* injected slot
+even though that specific real trade never named it, since our order
+shares one FIFO with real ones. Not solved here -- see
+`execution_user_doc.md` §12.3.
+
+Verified: `cargo test --release` -- 8 new unit tests (one per row of the
+ExecReport-to-message table, including the two "nothing happens" cases:
+a pure aggressive fill against real liquidity, and a rejected modify)
+plus one end-to-end test that feeds *only* what `ExecutionEngine`
+actually queues into a real `book::BookBuilder` and confirms
+`queue_position` comes back correct for both our own order and a real
+order arriving after it. `execution/validate.rs` gained a `mod book`
+declaration so that test module compiles under `cargo test --bin
+execution-validate` too. Whole workspace clean, 0 failures across all 7
+binaries (`qtrade` bin: 120 passing, up from 112). Real-data run:
+`order_lifecycle_demo` against `21_08_2026` stream-4, full file (40M
+outer records, 80M messages, ~31s) -- terminal counts unchanged
+(`denied=1 rejected=1 filled=1 canceled=2 expired=0`), and a
+`BOOK_DEBUG_MISSES=1` re-run produced **zero** `[MISS]` lines from
+`book.rs`'s `remove_order`/`modify_same_priority` across the order's
+full real lifecycle (rest, same-price modify, cancel, partial fill,
+remainder cancel, final fill) -- every injected message found exactly
+the slot it expected. Docs: `execution_user_doc.md` §12,
+`main_user_doc.md` §5a, this entry.
+
 ## Environment
 
 - Rust toolchain: `rustc`/`cargo` 1.98.0, via rustup, user-local under `~/.cargo`.

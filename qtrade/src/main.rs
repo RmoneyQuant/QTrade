@@ -244,6 +244,30 @@ fn sync_venue_alarms(venue: &SimExchange, sched: &mut Scheduler, next_arrival_al
     }
 }
 
+/// **Own-order injection (2026-09-03).** Same idiom as `sync_venue_alarms`
+/// right above -- called after every `dispatch_event`, from both the
+/// lookahead-drain loop and the final drain. Drains whatever
+/// `ExecutionEngine::handle_exec_reports` queued while `dispatch_event`
+/// ran (our own resting orders, quantity changes, fills, cancels --
+/// see `execution.rs`'s "own-order injection" section) and schedules
+/// each one toward `Target::Cache`, exactly like a real message, so
+/// `cache`'s book -- and a strategy reading it -- learns about our own
+/// orders from the same tape it learns about everyone else's, closing
+/// the gap Phase 1 (same day, `simulator.rs`) deliberately left open on
+/// the *matching* side. Scheduled at `now` (never earlier than whatever
+/// `dispatch_event` just processed, so the lookahead-drain's own
+/// ordering invariant holds); `exchange_ts`/`recorder_ts`/`seq_no` are
+/// "purely for logging/debugging" per `EventPayload::MarketData`'s own
+/// doc comment, so a synthetic message carries `now` for the first two
+/// and `0` for the third -- there is no real wire sequence number for
+/// something we generated ourselves.
+fn drain_cache_injections(engine: &mut ExecutionEngine, sched: &mut Scheduler) {
+    for (now_ns, message) in engine.take_pending_cache_injections() {
+        let now = now_ns as i64;
+        sched.schedule(now, EventClass::MarketData, EventPayload::MarketData { target: Target::Cache, message, seq_no: 0, exchange_ts: now_ns, recorder_ts: now });
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     let Some(config_path) = args.get(1) else {
@@ -543,6 +567,7 @@ fn main() -> ExitCode {
             let event = sched.pop_earliest().expect("just peeked Some");
             dispatch_event(event, &mut cache, &mut engine, &mut sim_venue, &mut event_dispatcher, &mut control_dispatcher);
             sync_venue_alarms(&sim_venue, &mut sched, &mut next_arrival_alarm, &mut next_visibility_alarm);
+            drain_cache_injections(&mut engine, &mut sched);
         }
 
         sched.schedule(exchange_ts, EventClass::MarketData, EventPayload::MarketData { target: Target::SimExchange, message: *ev.event, seq_no: ev.seq_no, exchange_ts: ev.exchange_ts, recorder_ts: ev.recorder_ts });
@@ -562,6 +587,7 @@ fn main() -> ExitCode {
     while let Some(event) = sched.pop_earliest() {
         dispatch_event(event, &mut cache, &mut engine, &mut sim_venue, &mut event_dispatcher, &mut control_dispatcher);
         sync_venue_alarms(&sim_venue, &mut sched, &mut next_arrival_alarm, &mut next_visibility_alarm);
+        drain_cache_injections(&mut engine, &mut sched);
     }
 
     // `Strategy::on_stop` -- real, wired (Q3 of the 2026-08-25 design

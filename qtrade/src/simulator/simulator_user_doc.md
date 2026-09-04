@@ -276,14 +276,46 @@ observed directly, not just asserted.
 matters is §7's invariant #1 discussion): a **passive** fill is a literal
 sub-quantity of one specific real `Trade` message's own quantity, produced
 only when that message's cascade (§3) reaches one of our resting orders.
-An **aggressive** fill (the immediate sweep above) consumes quantity that
-was genuinely resting in the book *at that instant* — real, verifiable
-liquidity, just not tied to a specific real `Trade` message, because no
-real trade actually happened at that moment (our hypothetical order was
-never really sent to MCX). This is D21's acknowledged "adverse selection"
-leak — modelled transparently, not hidden, and bounded by its own,
-equally-real ceiling (genuinely-resting quantity, never fabricated beyond
-it).
+An **aggressive** fill (the immediate sweep above) is bounded by quantity
+that was genuinely resting in the book *at that instant* — real,
+verifiable liquidity, just not tied to a specific real `Trade` message,
+because no real trade actually happened at that moment (our hypothetical
+order was never really sent to MCX).
+
+**Fill estimator, not matching engine (2026-09-03).** Earlier, an
+aggressive fill *physically* removed that quantity from the real slot it
+matched — `simulator` was, in that one respect, acting as a matching
+engine against its own book rather than only estimating what a real one
+would have done. That's now closed: `sweep_opposite` reads a real slot's
+`qty` and FIFO position but never writes them. What we took is tracked
+separately (`SimBookImpl::consumed_by_us`, keyed by the real order's own
+`priority_ts`), and every subsequent real event — a genuine `Trade`, a
+`Delete`, a price-changing `Modify` — still finds that slot exactly as
+the replay produced it. Two consequences:
+
+- **The book `simulator` reports** (`best_bid`/`best_ask`/`depth`/
+  `qty_at_price`) **never reflects our own trading.** It's the replay's
+  ground truth, full stop — the same guarantee independence from `cache`
+  (§1) gives against *inheriting* corruption now also holds against
+  *causing* it.
+- **Our own queue-position reads do** account for it: `qty_ahead_of` and
+  `MboBook::queue_position` net a real slot's `qty` against
+  `consumed_by_us` before counting it as "ahead" of one of our resting
+  orders — so if we've already aggressively taken 12 of a real order's 20
+  lots, a *different* order of ours resting behind that same slot
+  correctly sees 8 ahead, not 20.
+
+This closes D21's leak #3 ("you would have absorbed flow that
+historically went elsewhere") for the replay itself, but not entirely for
+us: our own fill genuinely happened, so nothing stops a *second*
+aggressive order of ours (or, independently, the historical tape itself)
+from also trading through the same real quantity in this simulation —
+`consumed_by_us` only prevents *us* from re-claiming what we've already
+virtually taken (`a_second_aggressive_order_cannot_reclaim_liquidity_we_already_virtually_took`,
+§6.1); it doesn't reserve that liquidity against the recording's own
+future trades. That's the accepted "no market impact" approximation this
+whole design rests on (§8) — the recording plays out exactly as captured,
+regardless of what we do alongside it.
 
 **Modify (FR-B23):**
 - Quantity **reduction only** (`new_qty <= current_remaining` **and** price
@@ -330,7 +362,7 @@ Both processes were launched as real background OS processes
 synchronously) — the exact discipline `book_user_doc.md` credits with
 saving results twice already on this project.
 
-### 6.1 Unit tests (18, all pass)
+### 6.1 Unit tests (28, all pass)
 
 `cargo test --release --bin simulator-validate` — small synthetic
 `DecodedMessage`s, no real files needed: queue position exact on arrival
@@ -350,6 +382,18 @@ message-rate cap actually rejecting the message that would breach it (and
 admitting again once the window has genuinely slid past), and a `modify`
 call being gated by the same governor as a new order (D19: OTR counts
 *messages sent*, not just new orders).
+
+Four more (2026-09-03, the "fill estimator, not matching engine" change):
+an aggressive fill leaves the real book's own displayed depth untouched
+(`aggressive_fill_leaves_real_book_depth_untouched`); a second aggressive
+order cannot re-claim quantity we already virtually took from the same
+real slot (`a_second_aggressive_order_cannot_reclaim_liquidity_we_already_virtually_took`);
+the virtual-consumption ledger for a real order is forgotten once that
+order is genuinely deleted, so it can never bleed onto an unrelated new
+order at the same price (`consumed_ledger_is_forgotten_once_the_real_order_it_tracked_is_gone`);
+and one of our own resting orders sees a *reduced* `qty_ahead` for a real
+slot we'd already aggressively drawn down, not the slot's full untouched
+size (`our_own_resting_order_sees_reduced_qty_ahead_after_our_earlier_aggressive_fill`).
 
 ---
 
@@ -407,6 +451,23 @@ an obvious crash — caught here only by noticing the evidence was
 suspiciously thin and tracing it back to its root cause, not by the
 invariant checks themselves.
 
+**Re-run after the "fill estimator, not matching engine" change
+(2026-09-03), same file, governed OTR config:** intervening feature work
+(`venue_order_id`, the quote-maintenance strategy this harness drives)
+means the raw counts below aren't directly comparable to the table
+above — reported separately rather than overwriting it. All six
+invariants still **PASS**, including **1b now under the new per-slot,
+effective-remaining accounting** described in §5 (6,381 aggressive fill
+legs checked, 0 violations) — the tightened bound (genuinely-resting
+*net of what we've already virtually taken*, not the level's raw
+pre-sweep quantity) held on every real leg, not just the unit tests.
+114,423,913 events processed, 1,128,602 for CRUDEOIL; 6,342 fills, 3,047
+rejects, 42 cancels, 267,472 restings; invariant #4 saw 10,063 qty-ahead
+observations (0 violations) — including, on real data, orders of ours
+resting behind a real slot we'd already aggressively drawn down, exactly
+the case `our_own_resting_order_sees_reduced_qty_ahead_after_our_earlier_aggressive_fill`
+(§6.1) covers synthetically.
+
 ---
 
 ## 8. What this component deliberately does not do
@@ -419,3 +480,15 @@ allow a mechanical self-trade to occur (two of our own resting orders on
 opposite sides matching each other) rather than silently preventing it —
 correct for now, since STP is explicitly deferred, not simultaneous with
 the core fill logic this milestone had to get solid first.
+
+**No market impact.** Since 2026-09-03 (§5), the replay's own book is
+never mutated by our own trading, on purpose — but our fills are still
+real, so nothing in this design prevents the same genuinely-resting
+quantity from being awarded to us *and* to the historical tape's own
+future trades (`consumed_by_us` only stops *us* from re-claiming what
+we've already virtually taken, not the recording from trading through it
+independently). The model assumes the recording plays out exactly as
+captured regardless of what we do alongside it; that assumption degrades
+as our own order size grows relative to displayed depth, and faster when
+quoting inside the spread — no participation cap or displacement model
+exists yet to bound it.

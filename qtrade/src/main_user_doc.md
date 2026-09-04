@@ -69,6 +69,20 @@ A real dual-clock run against `21_08_2026` (NATURALGAS, `naturalgas_bracket` str
 - **Does now use `scheduler.rs` for real (2026-08-27)** — this reverses the previous version of this bullet. `main.rs` owns the one real `Scheduler` this run drives, schedules every `MarketData`/`OrderArrival`/`ReportDelivery` event on it, and is the only place that pattern-matches a popped event (via its own `dispatch_event` function) into a call against `cache`/`engine`/`sim_venue`/`control_dispatcher`. See §3 item 6 above, and `scheduler_user_doc.md` for the module's own side of this.
 - Does not pick a real capture day for you, and does not detect whether one is safe for the dual-clock model. **Any file recorded before `21_08_2026` may contain a negative `recorder_ts - exchange_ts` delta** (a real, confirmed artifact of two recording servers whose clocks weren't NTP-synced to a common reference until ~2026-08-20 — full account in `feed_replay/feed_replay_user_doc.md` §2a) and will trip the Q1 fail-fast the instant it's hit, mid-run. Pick a day at or after `21_08_2026` for any real dual-clock run; `21_08_2026` itself is verified clean (60M records, zero negative deltas) and is what every real run in this project now uses.
 
+## 5a. Own-order injection (2026-09-03)
+
+`sync_venue_alarms` (§3 item 6) got a companion, `drain_cache_injections`,
+called from the exact same two spots right after it: the lookahead-drain
+loop and the final drain loop. It drains `ExecutionEngine::take_pending_cache_injections()`
+— synthetic `DecodedMessage`s `execution.rs` builds from our own
+`ExecReport`s (a resting order, a fill, a cancel) — and schedules each
+toward `Target::Cache` at `now`, same as a real message. This is what
+makes a strategy's own resting order, and its own fills, visible to
+`cache.book(id).queue_position(...)`, not just to `SimExchange`'s own
+internal bookkeeping. See `execution_user_doc.md` §12 for the full
+account, including a known, documented edge case (a real trade's
+fallback-cascade match landing on our own injected slot).
+
 ## 5. Real evidence the dual-clock/latency mechanism actually ran (2026-08-27)
 
 From the `21_08_2026` NATURALGAS run's real `orders.log`: every order's `Submitted` line and its matching `Filled`/`Rejected` line are exactly `100,000ns` apart (that run's configured `latency_ns`) — not zero, not some other value. That gap only exists because `Ctx::submit()` schedules a real `OrderArrival` event and the venue's response is only learned about via a later `ReportDelivery` event, both real `Scheduler` entries popped in real timestamp order — a synchronous shortcut could not produce this. The same run also logged real `recorder_ts`-driven wall-clock strings (via `naturalgas_bracket.rs`'s own `fmt_ist` helper) for every `on_start`/`ALARM`/`PLACING ORDER`/`ORDER UPDATE`/`FILL RECEIVED`/`PORTFOLIO updated` line — see `strategy/naturalgas_bracket/naturalgas_bracket.md` for the full trade-by-trade account (10 round trips: 5 TP, 5 SL, `net_pnl=-903.1182`).

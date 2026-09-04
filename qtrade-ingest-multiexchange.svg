@@ -1,0 +1,230 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1480 1180" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#9da7b3"/>
+    </marker>
+    <marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3fb950"/>
+    </marker>
+    <style>
+      .bg    { fill:#0d1117; }
+      .box   { fill:#161b22; stroke:#30363d; stroke-width:1.5; rx:8; }
+      .l3    { stroke:#4a9eff; }
+      .l2    { stroke:#f5a623; }
+      .shared{ stroke:#3fb950; }
+      .prop  { stroke-dasharray:6 4; }
+      .t     { fill:#e6edf3; font-size:13px; }
+      .tt    { fill:#e6edf3; font-size:14.5px; font-weight:600; }
+      .mut   { fill:#9da7b3; font-size:11.5px; }
+      .lab   { fill:#9da7b3; font-size:11px; }
+      .title { fill:#e6edf3; font-size:22px; font-weight:700; }
+      .flow  { fill:none; stroke:#9da7b3; stroke-width:1.6; }
+      .flowg { fill:none; stroke:#3fb950; stroke-width:1.8; }
+      .mono  { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1480" height="1180"/>
+
+  <text class="title" x="40" y="34">qtrade — multi-exchange data ingest:  files → decode → normalize → main.rs → cache</text>
+  <text class="mut"   x="40" y="55">Scope: the read path only, up to event_dispatcher. Strategy / execution / simulator deliberately not shown.  Solid = built today (MCX).  Dashed = proposed.</text>
+
+  <!-- ============ PER-EXCHANGE COLUMNS ============ -->
+  <text class="lab" x="1112" y="92" text-anchor="end">◄ per exchange</text>
+
+  <!-- Sources -->
+  <rect class="box l3"        x="110" y="76"  width="260" height="58"/>
+  <text class="tt"  x="240" y="100" text-anchor="middle">MCX increment .bin</text>
+  <text class="mut" x="240" y="120" text-anchor="middle">L3 · market-by-order</text>
+
+  <rect class="box l3 prop"   x="455" y="76"  width="260" height="58"/>
+  <text class="tt"  x="585" y="100" text-anchor="middle">NSE MTBT capture</text>
+  <text class="mut" x="585" y="120" text-anchor="middle">L3 · market-by-order</text>
+
+  <rect class="box l2 prop"   x="800" y="76"  width="260" height="58"/>
+  <text class="tt"  x="930" y="100" text-anchor="middle">Quincy QED capture (CME)</text>
+  <text class="mut" x="930" y="120" text-anchor="middle">L2 · top-5 aggregated depth</text>
+
+  <!-- Transport -->
+  <path class="flow" marker-end="url(#ah)" d="M240 134 L240 168"/>
+  <path class="flow prop" marker-end="url(#ah)" d="M585 134 L585 168"/>
+  <path class="flow prop" marker-end="url(#ah)" d="M930 134 L930 168"/>
+
+  <rect class="box l3"        x="110" y="170" width="260" height="52"/>
+  <text class="t"   x="240" y="192" text-anchor="middle">feed_replay · Transport</text>
+  <text class="mut" x="240" y="210" text-anchor="middle">backtest-only: streams bytes off disk</text>
+
+  <rect class="box l3 prop"   x="455" y="170" width="260" height="52"/>
+  <text class="t"   x="585" y="192" text-anchor="middle">NSE Transport</text>
+  <text class="mut" x="585" y="210" text-anchor="middle">backtest-only</text>
+
+  <rect class="box l2 prop"   x="800" y="170" width="260" height="52"/>
+  <text class="t"   x="930" y="192" text-anchor="middle">Quincy Transport</text>
+  <text class="mut" x="930" y="210" text-anchor="middle">backtest-only</text>
+
+  <!-- Decoder -->
+  <path class="flow" marker-end="url(#ah)" d="M240 222 L240 258"/>
+  <path class="flow prop" marker-end="url(#ah)" d="M585 222 L585 258"/>
+  <path class="flow prop" marker-end="url(#ah)" d="M930 222 L930 258"/>
+  <text class="lab" x="252" y="244">raw bytes</text>
+
+  <rect class="box l3"        x="110" y="260" width="260" height="74"/>
+  <text class="t mono" x="240" y="282" text-anchor="middle">mcx::decode  —  impl Decoder</text>
+  <text class="mut" x="240" y="301" text-anchor="middle">→ McxWire</text>
+  <text class="mut" x="240" y="319" text-anchor="middle">13100 / 13101 / 13106 / 13102, Trade, 13603…</text>
+
+  <rect class="box l3 prop"   x="455" y="260" width="260" height="74"/>
+  <text class="t mono" x="585" y="282" text-anchor="middle">nse::decode  —  impl Decoder</text>
+  <text class="mut" x="585" y="301" text-anchor="middle">→ NseWire</text>
+  <text class="mut" x="585" y="319" text-anchor="middle">N / M / X / T</text>
+
+  <rect class="box l2 prop"   x="800" y="260" width="260" height="74"/>
+  <text class="t mono" x="930" y="282" text-anchor="middle">quincy::decode  —  impl Decoder</text>
+  <text class="mut" x="930" y="301" text-anchor="middle">→ QuincyWire</text>
+  <text class="mut" x="930" y="319" text-anchor="middle">DepthUpdate (5 levels), Trade</text>
+
+  <!-- Normalizer -->
+  <path class="flow" marker-end="url(#ah)" d="M240 334 L240 366"/>
+  <path class="flow prop" marker-end="url(#ah)" d="M585 334 L585 366"/>
+  <path class="flow prop" marker-end="url(#ah)" d="M930 334 L930 366"/>
+  <text class="lab" x="252" y="352">McxWire</text>
+  <text class="lab" x="597" y="352">NseWire</text>
+  <text class="lab" x="942" y="352">QuincyWire</text>
+
+  <rect class="box l3"        x="110" y="368" width="260" height="72"/>
+  <text class="t mono" x="240" y="390" text-anchor="middle">mcx::Normalizer</text>
+  <text class="mut" x="240" y="408" text-anchor="middle">impl Normalizer</text>
+  <text class="mut" x="240" y="426" text-anchor="middle">McxWire → core::Event</text>
+
+  <rect class="box l3 prop"   x="455" y="368" width="260" height="72"/>
+  <text class="t mono" x="585" y="390" text-anchor="middle">nse::Normalizer</text>
+  <text class="mut" x="585" y="408" text-anchor="middle">impl Normalizer</text>
+  <text class="mut" x="585" y="426" text-anchor="middle">NseWire → core::Event</text>
+
+  <rect class="box l2 prop"   x="800" y="368" width="260" height="72"/>
+  <text class="t mono" x="930" y="390" text-anchor="middle">quincy::Normalizer</text>
+  <text class="mut" x="930" y="408" text-anchor="middle">impl Normalizer</text>
+  <text class="mut" x="930" y="426" text-anchor="middle">QuincyWire → core::Event</text>
+
+  <!-- ============ AGNOSTIC BOUNDARY ============ -->
+  <line x1="60" y1="470" x2="1110" y2="470" stroke="#3fb950" stroke-width="2" stroke-dasharray="8 5"/>
+  <rect x="330" y="456" width="520" height="28" rx="6" fill="#0d1117" stroke="#3fb950" stroke-width="1.2"/>
+  <text class="t" x="590" y="475" text-anchor="middle" fill="#3fb950">EXCHANGE-AGNOSTIC BOUNDARY — below here, only <tspan class="mono">core::Event</tspan></text>
+
+  <!-- converge to Sequencer -->
+  <path class="flowg" marker-end="url(#ahg)" d="M240 440 L240 498"/>
+  <path class="flowg" marker-end="url(#ahg)" d="M585 440 L585 484 L360 484 L360 498"/>
+  <path class="flowg" marker-end="url(#ahg)" d="M930 440 L930 484 L820 484 L820 498"/>
+  <text class="lab mono" x="248" y="492" fill="#3fb950">core::Event</text>
+
+  <!-- Sequencer -->
+  <rect class="box shared" x="150" y="500" width="880" height="60"/>
+  <text class="tt" x="590" y="522" text-anchor="middle">Sequencer · k-way merge  (backtest)</text>
+  <text class="mut" x="590" y="541" text-anchor="middle">merge the N core::Event streams → one stream, ordered by recorder_ts, tie-break (source_id, seq)</text>
+  <text class="mut" x="590" y="556" text-anchor="middle">each event keeps its own venue's exchange_ts as a field · live: streams arrive by wire order instead</text>
+
+  <!-- main.rs -->
+  <path class="flowg" marker-end="url(#ahg)" d="M590 560 L590 594"/>
+  <text class="lab" x="602" y="580" fill="#3fb950">one merged core::Event stream</text>
+
+  <rect class="box shared" x="150" y="596" width="880" height="56"/>
+  <text class="tt" x="590" y="618" text-anchor="middle">main.rs — the loop</text>
+  <text class="mut" x="590" y="637" text-anchor="middle">pop earliest merged event → fan out.  No per-message venue branch anywhere below this point.</text>
+
+  <!-- main.rs -> cache  and  main.rs -> event_dispatcher -->
+  <path class="flowg" marker-end="url(#ahg)" d="M400 652 L400 686 L300 686 L300 700"/>
+  <text class="lab mono" x="150" y="678" fill="#3fb950">cache.on_message(&amp;core::Event)</text>
+
+  <path class="flowg" marker-end="url(#ahg)" d="M820 652 L820 686 L945 686 L945 756"/>
+  <text class="lab" x="828" y="678" fill="#3fb950">then: event_dispatcher.on_book_touched(…)</text>
+
+  <!-- ============ CACHE ============ -->
+  <rect class="box shared" x="60" y="700" width="700" height="440"/>
+  <text class="tt" x="80" y="724">Cache</text>
+
+  <rect class="box" x="82" y="736" width="656" height="44"/>
+  <text class="t" x="410" y="763" text-anchor="middle">InstrumentFilter — drop any instrument no strategy subscribed to  (keyed on instrument id; venue plays no part)</text>
+
+  <rect class="box" x="82" y="800" width="656" height="322"/>
+  <text class="tt" x="102" y="824">BookBuilder — one book per instrument</text>
+  <text class="mut" x="102" y="843">book_kind (on the Instrument record, set by that venue's adapter) picks which book gets built:</text>
+
+  <rect class="box l3" x="100" y="856" width="308" height="200"/>
+  <text class="t mono" x="254" y="878" text-anchor="middle">AnyBook::Mbo → MboBookImpl</text>
+  <text class="mut" x="118" y="900">• consumes OrderAdd / OrderModify /</text>
+  <text class="mut" x="118" y="916">   OrderDelete / Trade</text>
+  <text class="mut" x="118" y="936">• dense order-by-order ladder</text>
+  <text class="mut" x="118" y="952">   — full depth, no level cap</text>
+  <text class="mut" x="118" y="972">• impl Book + MboBook</text>
+  <text class="t"   x="118" y="994" fill="#4a9eff">• queue_position()  ✓  (L3 has it)</text>
+
+  <rect class="box l2 prop" x="424" y="856" width="298" height="200"/>
+  <text class="t mono" x="573" y="878" text-anchor="middle">AnyBook::Mbp → MbpBookImpl</text>
+  <text class="mut" x="442" y="900">• consumes DepthUpdate / Trade</text>
+  <text class="mut" x="442" y="920">• holds 5 bid + 5 ask levels</text>
+  <text class="mut" x="442" y="936">   — overwrite on each update</text>
+  <text class="mut" x="442" y="956">• impl Book   (NOT MboBook)</text>
+  <text class="t"   x="442" y="978" fill="#f5a623">• queue_position() —</text>
+  <text class="t"   x="442" y="994" fill="#f5a623">   won't compile for L2</text>
+
+  <rect class="box" x="82" y="1074" width="656" height="40"/>
+  <text class="t mono" x="410" y="1099" text-anchor="middle">Cache::book(id) → &amp;dyn Book      ·      Cache::mbo_book(id) → Option&lt;&amp;dyn MboBook&gt;</text>
+
+  <!-- ============ EVENT DISPATCHER ============ -->
+  <rect class="box shared" x="800" y="758" width="310" height="150"/>
+  <text class="tt" x="820" y="782">event_dispatcher.rs</text>
+  <text class="mut" x="820" y="806">reads the just-touched book via</text>
+  <text class="mut mono" x="820" y="824">&amp;dyn Book</text>
+  <text class="mut" x="820" y="842">at each subscriber's depth</text>
+  <text class="mut" x="820" y="860">(Bbo / Top(n)) → wakes it</text>
+
+  <path class="flowg" marker-end="url(#ahg)" d="M740 900 L800 900"/>
+  <text class="lab mono" x="744" y="892" fill="#3fb950">&amp;dyn Book</text>
+
+  <path class="flow prop" marker-end="url(#ah)" d="M1110 850 L1170 850"/>
+  <text class="lab" x="1112" y="842">on_book / on_trade →</text>
+  <text class="lab" x="1112" y="878">Strategy  (out of scope)</text>
+
+  <!-- ============ RIGHT: TRAITS LEGEND ============ -->
+  <rect class="box" x="1150" y="76" width="300" height="376"/>
+  <text class="tt" x="1168" y="100">TRAITS — what makes it agnostic</text>
+
+  <text class="t mono"  x="1168" y="128" fill="#e6edf3">trait Decoder</text>
+  <text class="mut" x="1168" y="145">bytes → &lt;venue&gt;Wire · 1 impl / exchange</text>
+
+  <text class="t mono"  x="1168" y="171" fill="#e6edf3">trait Normalizer</text>
+  <text class="mut" x="1168" y="188">&lt;venue&gt;Wire → core::Event · 1 / exchange</text>
+  <text class="mut" x="1168" y="204">↑ below here nothing knows the venue</text>
+
+  <text class="t mono"  x="1168" y="230" fill="#3fb950">enum core::Event</text>
+  <text class="mut" x="1168" y="247">the one shared message vocabulary</text>
+  <text class="mut" x="1168" y="264">L3:  OrderAdd · OrderModify{priority} ·</text>
+  <text class="mut" x="1168" y="280">      OrderDelete · Trade · BandUpdate</text>
+  <text class="mut" x="1168" y="296">L2:  DepthUpdate · Trade</text>
+
+  <text class="t mono"  x="1168" y="322" fill="#4a9eff">trait Book</text>
+  <text class="mut" x="1168" y="339">best_bid · best_ask · depth(n) · state</text>
+  <text class="mut" x="1168" y="355">— every book, both kinds</text>
+
+  <text class="t mono"  x="1168" y="381" fill="#4a9eff">trait MboBook: Book</text>
+  <text class="mut" x="1168" y="398">+ queue_position()  — L3 books only</text>
+
+  <text class="t mono"  x="1168" y="424" fill="#e6edf3">enum AnyBook { Mbo, Mbp }</text>
+  <text class="mut" x="1168" y="441">hot-path storage: a match, not a vtable</text>
+
+  <!-- ============ RIGHT: STATUS LEGEND ============ -->
+  <rect class="box" x="1150" y="936" width="300" height="204"/>
+  <text class="tt" x="1168" y="960">STATUS</text>
+  <line x1="1168" y1="978" x2="1210" y2="978" stroke="#9da7b3" stroke-width="1.8"/>
+  <text class="mut" x="1218" y="982">exists today (MCX only)</text>
+  <line x1="1168" y1="1000" x2="1210" y2="1000" stroke="#9da7b3" stroke-width="1.8" stroke-dasharray="6 4"/>
+  <text class="mut" x="1218" y="1004">proposed / not built</text>
+
+  <text class="mut" x="1168" y="1030">built: feed_replay(MCX), decoder(MCX wire</text>
+  <text class="mut" x="1168" y="1046">— today doubles as core::Event), Cache,</text>
+  <text class="mut" x="1168" y="1062">BookBuilder, MboBookImpl, Book/MboBook,</text>
+  <text class="mut" x="1168" y="1078">event_dispatcher, same-venue merge</text>
+  <text class="mut" x="1168" y="1100">to build: NSE + Quincy decoders,</text>
+  <text class="mut" x="1168" y="1116">Normalizer layer + core::Event type,</text>
+  <text class="mut" x="1168" y="1132">MbpBookImpl, book_kind, cross-venue clock</text>
+</svg>

@@ -1,0 +1,184 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1080" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <title>qtrade — SimExchange fill estimator and own-order injection into cache</title>
+  <desc>Architecture diagram of the 2026-09-03 changes: SimExchange stops mutating the real book on an aggressive fill (tracked in a consumed_by_us ledger instead), and ExecutionEngine converts our own order events into wire-shaped messages injected into the same stream cache reads, so cache's book answers queue_position for our own orders too. SimExchange and cache still never talk to each other directly (D10).</desc>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#9da7b3"/>
+    </marker>
+    <marker id="ahb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#4a9eff"/>
+    </marker>
+    <marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3fb950"/>
+    </marker>
+    <style>
+      .bg     { fill:#0d1117; }
+      .box    { fill:#161b22; stroke:#30363d; stroke-width:1.5; rx:8; }
+      .boxb   { fill:#161b22; stroke:#4a9eff; stroke-width:1.3; rx:7; }
+      .boxg   { fill:#161b22; stroke:#3fb950; stroke-width:1.5; rx:7; }
+      .boxa   { fill:#161b22; stroke:#f5a623; stroke-width:1.3; rx:7; }
+      .t      { fill:#e6edf3; font-size:12.5px; }
+      .tt     { fill:#e6edf3; font-size:14px; font-weight:600; }
+      .ttg    { fill:#3fb950; font-size:13.5px; font-weight:600; }
+      .tta    { fill:#f5a623; font-size:13px; font-weight:600; }
+      .mut    { fill:#9da7b3; font-size:11.5px; }
+      .mutg   { fill:#7ee08a; font-size:11.5px; }
+      .lab    { fill:#9da7b3; font-size:11px; }
+      .labb   { fill:#7fb8ff; font-size:11.5px; }
+      .labg   { fill:#3fb950; font-size:11.5px; }
+      .labr   { fill:#f85149; font-size:11.5px; }
+      .title  { fill:#e6edf3; font-size:22px; font-weight:700; }
+      .sub    { fill:#9da7b3; font-size:12px; }
+      .flow   { fill:none; stroke:#9da7b3; stroke-width:1.6; }
+      .flowb  { fill:none; stroke:#4a9eff; stroke-width:1.7; }
+      .flowg  { fill:none; stroke:#3fb950; stroke-width:1.9; }
+      .mono   { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1600" height="1080"/>
+
+  <text class="title" x="40" y="34">qtrade — SimExchange as fill estimator, and own-order injection into cache  (2026-09-03)</text>
+  <text class="sub" x="40" y="55">Two changes, one day: (1) an aggressive fill stops mutating the replay's own book — a ledger tracks what we took instead. (2) our own order events become wire-shaped</text>
+  <text class="sub" x="40" y="70">messages, injected into the same stream cache reads. <tspan fill="#7fb8ff">Blue = pre-existing, unchanged.</tspan> <tspan fill="#7ee08a">Green = new.</tspan> <tspan fill="#f85149">Red = still explicitly absent (D10).</tspan> <tspan fill="#f5a623">Amber = known, documented caveat.</tspan></text>
+
+  <!-- ============ SOURCE ============ -->
+  <rect class="box" x="650" y="86" width="300" height="46"/>
+  <text class="tt mono" x="800" y="107" text-anchor="middle">MCX capture file(s)</text>
+  <text class="mut" x="800" y="123" text-anchor="middle">.bin — Increment_capture</text>
+
+  <path class="flow" marker-end="url(#ah)" d="M800 132 L800 156"/>
+
+  <rect class="box" x="650" y="158" width="300" height="42"/>
+  <text class="t mono" x="800" y="177" text-anchor="middle">feed_replay :: decode</text>
+  <text class="mut" x="800" y="193" text-anchor="middle">backtest-only, dual-clock split</text>
+
+  <!-- fan-out to SimExchange and cache -->
+  <path class="flowb" marker-end="url(#ahb)" d="M710 200 C 560 225, 400 240, 302 258"/>
+  <text class="labb mono" x="470" y="222" text-anchor="middle">real msg @ exchange_ts</text>
+  <text class="labb" x="470" y="235" text-anchor="middle">→ Target::SimExchange</text>
+
+  <path class="flowb" marker-end="url(#ahb)" d="M890 200 C 1040 225, 1200 240, 1298 258"/>
+  <text class="labb mono" x="1130" y="222" text-anchor="middle">real msg @ recorder_ts</text>
+  <text class="labb" x="1130" y="235" text-anchor="middle">→ Target::Cache</text>
+
+  <!-- ============ SimExchange (LEFT) ============ -->
+  <rect class="box" x="40" y="260" width="520" height="470"/>
+  <text class="tt mono" x="300" y="286" text-anchor="middle">SimExchange  (simulator.rs)</text>
+  <text class="mut" x="300" y="302" text-anchor="middle">fill estimator, not matching engine — D10, independent of cache</text>
+
+  <rect class="boxb" x="64" y="316" width="472" height="104"/>
+  <text class="tt" x="300" y="336" text-anchor="middle">SimBookImpl (per instrument)</text>
+  <text class="t mono" x="300" y="354" text-anchor="middle">bids / asks : BTreeMap&lt;price, Level&gt;</text>
+  <text class="mut" x="300" y="372" text-anchor="middle">ground truth — mutated ONLY by apply_real_event</text>
+  <text class="mut" x="300" y="388" text-anchor="middle">(the real replayed messages), never by our own orders</text>
+  <text class="labr" x="300" y="406" text-anchor="middle">⊘ never read by cache — D10, no exception</text>
+
+  <rect class="boxg" x="64" y="430" width="472" height="92"/>
+  <text class="ttg mono" x="300" y="450" text-anchor="middle">consumed_by_us : HashMap&lt;priority_ts, qty&gt;   [NEW]</text>
+  <text class="mutg" x="300" y="468" text-anchor="middle">our own aggressive sweeps write HERE —</text>
+  <text class="mutg" x="300" y="484" text-anchor="middle">a real slot's own qty / FIFO position is never touched</text>
+  <text class="mut" x="300" y="500" text-anchor="middle">qty_ahead_of / queue_position net this off too, for our own orders</text>
+
+  <rect class="box" x="64" y="532" width="472" height="80"/>
+  <text class="tt mono" x="300" y="552" text-anchor="middle">resting : HashMap&lt;client_order_id, RestingSimOrder&gt;</text>
+  <text class="mut" x="300" y="570" text-anchor="middle">our own resting orders — Sim-owned slots in the same</text>
+  <text class="mut" x="300" y="586" text-anchor="middle">combined FIFO as real orders, physically mutated (that part is ours)</text>
+
+  <text class="labg mono" x="300" y="700" text-anchor="middle">→ Vec&lt;ExecReport&gt; : Resting · Filled{Passive|Aggressive} · Canceled · Rejected</text>
+
+  <!-- ============ ExecutionEngine (MIDDLE) ============ -->
+  <rect class="box" x="610" y="260" width="380" height="470"/>
+  <text class="tt mono" x="800" y="286" text-anchor="middle">ExecutionEngine  (execution.rs)</text>
+  <text class="mut" x="800" y="302" text-anchor="middle">order state + own-order injection</text>
+
+  <rect class="box" x="634" y="316" width="332" height="88"/>
+  <text class="tt mono" x="800" y="336" text-anchor="middle">orders : HashMap&lt;client_order_id, Order&gt;</text>
+  <text class="mut" x="800" y="354" text-anchor="middle">state, venue_order_id,</text>
+  <text class="mutg mono" x="800" y="370" text-anchor="middle">cache_injected_at: Option&lt;(Price, priority_ts)&gt;  [NEW]</text>
+  <text class="mut" x="800" y="386" text-anchor="middle">— tracks what we've currently published to cache</text>
+
+  <rect class="boxg" x="634" y="412" width="332" height="192"/>
+  <text class="ttg mono" x="800" y="432" text-anchor="middle">handle_exec_reports — translation   [NEW]</text>
+  <text class="t mono" x="650" y="450">Resting, first time    → OrderAdd</text>
+  <text class="t mono" x="650" y="467">Resting, same price    → OrderModifySamePriority</text>
+  <text class="t mono" x="650" y="484">Resting, new price     → OrderDelete + OrderAdd</text>
+  <text class="t mono" x="650" y="501">Filled, slot empties   → OrderDelete</text>
+  <text class="t mono" x="650" y="518">Filled, slot remains   → OrderModifySamePriority</text>
+  <text class="t mono" x="650" y="535">Filled, no prior slot  → (nothing injected)</text>
+  <text class="t mono" x="650" y="552">Canceled               → OrderDelete</text>
+  <text class="mutg" x="800" y="576" text-anchor="middle">identity = handle.priority_ts (simulator::SIM_ID_BASE) — reused, not minted</text>
+  <text class="mutg" x="800" y="592" text-anchor="middle">a pure aggressive fill (never rested) publishes nothing — Phase 1's "no market impact" holds here too</text>
+
+  <rect class="boxg" x="634" y="616" width="332" height="90"/>
+  <text class="ttg mono" x="800" y="636" text-anchor="middle">pending_cache_injections : Vec&lt;(now_ns, DecodedMessage)&gt;  [NEW]</text>
+  <text class="mutg" x="800" y="654" text-anchor="middle">outbox — drained by main.rs::drain_cache_injections,</text>
+  <text class="mutg" x="800" y="670" text-anchor="middle">same idiom as sync_venue_alarms</text>
+
+  <!-- ============ Cache (RIGHT) ============ -->
+  <rect class="box" x="1040" y="260" width="520" height="470"/>
+  <text class="tt mono" x="1300" y="286" text-anchor="middle">Cache  (cache.rs / book.rs)</text>
+  <text class="mut" x="1300" y="302" text-anchor="middle">the shared read model</text>
+
+  <rect class="boxb" x="1064" y="316" width="472" height="120"/>
+  <text class="tt mono" x="1300" y="336" text-anchor="middle">BookBuilder → MboBookImpl (per instrument)</text>
+  <text class="mut" x="1300" y="354" text-anchor="middle">ONE combined FIFO per (side, price) —</text>
+  <text class="labg" x="1300" y="370" text-anchor="middle">real + injected orders, no owner distinction  [now reachable]</text>
+  <text class="mut" x="1300" y="386" text-anchor="middle">book.rs itself is unchanged: it never special-cased</text>
+  <text class="mut" x="1300" y="402" text-anchor="middle">who a priority_ts belongs to</text>
+  <text class="labr" x="1300" y="422" text-anchor="middle">⊘ never reads or writes SimExchange's book — D10, no exception</text>
+
+  <rect class="box" x="1064" y="450" width="472" height="68"/>
+  <text class="tt mono" x="1300" y="470" text-anchor="middle">queue_position(handle) : Option&lt;i64&gt;</text>
+  <text class="labg" x="1300" y="488" text-anchor="middle">now answers for OUR OWN orders too — not just real ones</text>
+
+  <rect class="boxa" x="1064" y="532" width="472" height="92"/>
+  <text class="tta" x="1300" y="552" text-anchor="middle">⚠ known edge case — fallback-cascade match</text>
+  <text class="mut" x="1300" y="570" text-anchor="middle">a real trade whose event_time names no specific resting</text>
+  <text class="mut" x="1300" y="586" text-anchor="middle">priority_ts cascades from FIFO-front — can land on our own</text>
+  <text class="mut" x="1300" y="602" text-anchor="middle">injected slot (rare; documented, not solved — §12.3)</text>
+
+  <!-- ============ row-3 connecting arrows ============ -->
+  <!-- SimExchange -> ExecutionEngine : ExecReport (upper lane) -->
+  <path class="flowb" marker-end="url(#ahb)" d="M562 340 L608 340"/>
+
+  <!-- ExecutionEngine -> SimExchange : commands (lower lane) -->
+  <path class="flowb" marker-end="url(#ahb)" d="M608 660 L562 660"/>
+  <text class="labb" x="585" y="650" text-anchor="middle">commands</text>
+
+  <!-- ExecutionEngine -> Scheduler -> Cache : injected message (green, the new link) -->
+  <path class="flowg" marker-end="url(#ahg)" d="M966 661 L1006 661 L1006 371 L1062 371"/>
+  <circle cx="1006" cy="661" r="4" fill="#3fb950"/>
+  <text class="labg mono" x="1015" y="744" text-anchor="middle">main.rs :: Scheduler.schedule(now, Target::Cache, message) — same queue real messages use</text>
+
+  <!-- ============ Strategy ============ -->
+  <rect class="box" x="610" y="880" width="380" height="110"/>
+  <text class="tt mono" x="800" y="904" text-anchor="middle">Strategy (Ctx)</text>
+  <text class="t mono" x="800" y="924" text-anchor="middle">reads : cache.book(id).queue_position(our_handle)</text>
+  <text class="labg" x="800" y="940" text-anchor="middle">answers Some(n) for our own orders now — Phase 2</text>
+  <text class="t mono" x="800" y="960" text-anchor="middle">writes : ctx.submit / cancel / modify</text>
+
+  <!-- Cache -> Strategy -->
+  <path class="flow" marker-end="url(#ah)" d="M1300 730 L1300 820 L992 820"/>
+  <text class="lab mono" x="1150" y="812" text-anchor="middle">queue_position(handle)</text>
+
+  <!-- Strategy -> ExecutionEngine -->
+  <path class="flow" marker-end="url(#ah)" d="M800 878 L800 732"/>
+  <text class="lab mono" x="822" y="850" text-anchor="start">ctx.submit/cancel/modify</text>
+  <text class="lab" x="822" y="864" text-anchor="start">→ gates → deliver_order/cancel/modify</text>
+
+  <!-- ============ legend ============ -->
+  <line x1="40" y1="1018" x2="76" y2="1018" stroke="#4a9eff" stroke-width="2.2"/>
+  <text class="lab" x="84" y="1022">pre-existing — dual-clock replay, D10 independence — unchanged by this work</text>
+
+  <line x1="40" y1="1038" x2="76" y2="1038" stroke="#3fb950" stroke-width="2.2"/>
+  <text class="lab" x="84" y="1042">new (2026-09-03) — the fill-estimator ledger, and own-order injection into cache</text>
+
+  <line x1="620" y1="1018" x2="656" y2="1018" stroke="#f85149" stroke-width="2.2" stroke-dasharray="5 4"/>
+  <text class="lab" x="664" y="1022">explicitly absent — D10: the two books still never talk to each other directly</text>
+
+  <line x1="620" y1="1038" x2="656" y2="1038" stroke="#f5a623" stroke-width="2.2"/>
+  <text class="lab" x="664" y="1042">known, documented edge case — not yet solved (§12.3)</text>
+
+  <text class="lab" x="1560" y="1042" text-anchor="end">execution_user_doc.md §12 · simulator_user_doc.md §5 · main_user_doc.md §5a</text>
+</svg>

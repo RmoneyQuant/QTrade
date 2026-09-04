@@ -718,3 +718,99 @@ confirming this fix touched only the P&L formula, not the cost stack.
 value is now expressed in changed from raw units to lots — a non-flat run
 would previously have shown e.g. `10000` for a 1-lot position and now
 correctly shows `1`.
+
+## 12. Own-order injection (2026-09-03) — `cache` learns about our own orders from the tape, not a side channel
+
+### 12.1 The gap this closes
+
+Before this: `main.rs`'s Scheduler feeds exactly one thing toward
+`Target::Cache` — the real replayed message, unchanged (`main.rs:553-554`
+at the time). Nothing our own orders did ever reached `cache`. `queue_position`
+for one of our own resting orders only existed via
+`ExecutionEngine::prepare_for_market_event` reading `SimExchange::resting_qty_ahead`
+directly (`main.rs` bridging the two, since D10 forbids either reaching
+the other on its own) — a real accessor, but a **side channel**: a
+strategy asking `cache.book(id).queue_position(our_handle)` got `None`,
+always, because `cache`'s own book never had our order in it at all.
+
+### 12.2 What it does
+
+Every `ExecReport` that changes what our own order contributes to a book
+(`Resting`, `Filled`, `Canceled`) is converted into the same kind of
+`DecodedMessage` a real MCX order would produce, and queued in
+`ExecutionEngine::pending_cache_injections`. `main.rs::drain_cache_injections`
+(same idiom as `sync_venue_alarms`, called from the same two places, right
+after every `dispatch_event`) schedules each one toward `Target::Cache` at
+`now`. `cache`'s book applies it through `book::BookBuilder::apply` —
+**no special-casing on the receiving end**: `book.rs` doesn't know or
+care whether a `priority_ts` came from a real MCX order or from us.
+
+| `ExecReport` | Injected message | Why |
+|---|---|---|
+| `Resting`, first time for this order | `OrderAdd` | Establishes the slot. |
+| `Resting`, after a same-price qty-only modify | `OrderModifySamePriority` | Same FIFO slot — priority retained, matching real MCX's own `13106` semantics. |
+| `Resting`, after a price-changing (or qty-increasing) modify | `OrderDelete` (old slot) then `OrderAdd` (new slot) | Old identity removed entirely, fresh one added at the back — same wording real `OrderModify (13101)` uses. |
+| `Filled`, order now fully filled, had an injected slot | `OrderDelete` | The slot is gone for good. |
+| `Filled`, order still has quantity left, had an injected slot | `OrderModifySamePriority` | Same slot, smaller quantity — a fill never moves FIFO position. |
+| `Filled`, order never had an injected slot (a pure aggressive fill against real liquidity) | *(nothing)* | Consistent with Phase 1 (2026-09-03, same day, `simulator_user_doc.md` §5): the replay's own book was never mutated by that fill either — there's nothing of ours in `cache`'s book to update. |
+| `Canceled`, had an injected slot | `OrderDelete` | The slot is gone. |
+
+The identity used for every injected message is `ExecReport::Resting`'s
+own `handle.priority_ts` — `simulator`'s `sim_id` (see
+`simulator::SIM_ID_BASE`, made `pub` for this), reused as-is rather than
+minted fresh: it already lives in a numeric range that provably never
+collides with a real `priority_ts`, and it already carries the exact
+priority semantics needed (unchanged across a same-price qty-only modify,
+fresh across a price change or quantity increase) — SimExchange had
+already solved this problem once, for its own independent book (Phase 1);
+`Order::cache_injected_at: Option<(Price, u64)>` just remembers what was
+last published, so `handle_exec_reports` can tell "unchanged identity" from
+"identity moved" from "never published before" without re-deriving
+anything.
+
+### 12.3 A known, accepted edge case: the fallback-cascade path
+
+`book::MboBookImpl::apply_trade` (like `simulator`'s own independent
+reimplementation) has two ways to find which resting order a real `Trade`
+message hit: match its `event_time` against a specific resting
+`priority_ts` directly (the normal case — real MCX execution reports
+reliably name their own counterparty, D21 finding #3), or, if nothing
+resting matches, **cascade from the front of the queue** (the documented
+fallback for "pre-replay-window order, or a genuine race").
+
+Now that our own order can sit in that same combined FIFO, the fallback
+path can walk into *our* slot even though that specific real trade never
+named it — misattributing a real trade's volume against our own injected
+presence. This is rare (the fallback path is itself documented as an edge
+case, not the normal one) and not silently ignored — it just isn't solved
+here. `injected_messages_feed_a_real_book_builder_and_answer_queue_position_correctly`
+(§12.4) deliberately avoids it (uses only precisely-targeted trades) so the
+test proves what's actually built, not a scenario this design doesn't yet
+handle. Worth revisiting if it ever shows up in a real run.
+
+### 12.4 Verified
+
+`cargo test --release` — 8 new unit tests in `execution.rs` (`take_pending_cache_injections`
+producing the right message for each of the table's rows above, including
+the two "nothing happens" cases) plus one end-to-end test,
+`injected_messages_feed_a_real_book_builder_and_answer_queue_position_correctly`,
+that feeds *only* what `ExecutionEngine` actually queues into a real
+`book::BookBuilder` (the same type `cache::Cache` wraps) and confirms it
+answers `queue_position` correctly both for our own order and for a real
+order that arrives after it. `execution/validate.rs` gained a `mod book`
+declaration purely so this test module compiles under `cargo test --bin
+execution-validate` too. Whole workspace `cargo test --release` clean, 0
+failures across every binary (`qtrade` bin: 120 passing, up from 112).
+
+Real-data run: `order_lifecycle_demo` against `21_08_2026` stream-4 (the
+same script `order_lifecycle_demo.md` documents — submit, modify, cancel,
+a partial fill, cancel-remainder, a final full fill), full file (40M
+outer records, 80M messages, ~31s). Terminal counts unchanged from before
+this change (`denied=1 rejected=1 filled=1 canceled=2 expired=0`) —
+own-order injection is additive, not behavior-changing for the strategy
+itself. Re-run with `BOOK_DEBUG_MISSES=1` produced **zero** `[MISS]` lines
+from `book.rs`'s `remove_order`/`modify_same_priority` — every injected
+message found exactly the slot it expected to, across the order's full
+real lifecycle (initial rest, a same-price modify, a cancel, a partial
+fill, a remainder cancel, a final immediate fill), not just the
+hand-built unit-test scenarios.

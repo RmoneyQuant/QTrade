@@ -86,7 +86,16 @@ struct Level {
 /// real capture timestamps) and 2026 epoch-nanoseconds sit at roughly
 /// 1.77 x 10^18 -- comfortably below this base, with `u64::MAX` at
 /// ~1.8 x 10^19 giving ample headroom above it for the run's lifetime.
-const SIM_ID_BASE: u64 = 9_000_000_000_000_000_000;
+///
+/// `pub` (2026-09-03): `execution.rs` reuses `ExecReport::Resting`'s own
+/// `handle.priority_ts` -- a value already drawn from this range -- as
+/// the identity for our own order's resting presence when it injects
+/// that presence into the stream `cache` reads (see `ExecutionEngine`'s
+/// "own-order injection" methods). This constant doesn't move; exposing
+/// it lets that code assert the values it's handling really do live in
+/// this space, rather than re-deriving the same collision-freedom
+/// argument a second time.
+pub const SIM_ID_BASE: u64 = 9_000_000_000_000_000_000;
 
 /// One instrument's book: a price-sorted map of `Level`s per side. Unlike
 /// `book::MboBookImpl`'s dense pre-sized array (sized off an
@@ -101,6 +110,21 @@ pub struct SimBookImpl {
     state: BookState,
     diag_remove_misses: u64,
     diag_trade_misses: u64,
+    /// Fill estimator, not matching engine (2026-09-03 -- revises D21's
+    /// "you would have absorbed flow that historically went elsewhere"
+    /// leak, previously modelled by *physically* removing swept quantity
+    /// from a real slot). Keyed by the real order's own `priority_ts`:
+    /// how much of that slot our own aggressive orders have virtually
+    /// taken, without the slot itself ever shrinking. The replay's ground
+    /// truth -- `bids`/`asks` -- is mutated **only** by `apply_real_event`
+    /// from here on; our own submit/cancel/modify never touch a real
+    /// slot's `qty` or FIFO position, only this ledger. Cleared for a
+    /// `priority_ts` the moment that slot's real identity is gone
+    /// (`remove_real`, a real trade that fully consumes it, mass delete)
+    /// -- once it can never be looked up again, keeping a residual entry
+    /// serves no purpose. See `sweep_opposite`, `qty_ahead_of`,
+    /// `MboBook::queue_position`, and `simulator_user_doc.md` §5.
+    consumed_by_us: HashMap<u64, i64>,
 }
 
 impl SimBookImpl {
@@ -112,7 +136,28 @@ impl SimBookImpl {
             state: BookState::Uninit,
             diag_remove_misses: 0,
             diag_trade_misses: 0,
+            consumed_by_us: HashMap::new(),
         }
+    }
+
+    /// How much of a real slot's own `qty` is still genuinely available to
+    /// *us* -- its wire quantity minus whatever we've already virtually
+    /// swept from it, floored at 0. The slot's own `qty` never reflects
+    /// our activity (see `consumed_by_us`'s doc comment), so this is the
+    /// one place that combines the two into "what's really left for me."
+    fn real_effective_remaining(&self, slot_qty: i64, priority_ts: u64) -> i64 {
+        (slot_qty - self.consumed_by_us.get(&priority_ts).copied().unwrap_or(0)).max(0)
+    }
+
+    /// A real slot's identity is gone for good (deleted, replaced by a
+    /// price-changing modify, fully traded out, or mass-deleted) -- drop
+    /// any virtual-consumption entry for it. Pure hygiene: a `priority_ts`
+    /// is never reused (epoch-nanosecond, same uniqueness argument as
+    /// `SIM_ID_BASE`'s doc comment), so a stale entry is inert, never
+    /// harmful -- this just keeps `consumed_by_us` bounded by what's
+    /// actually resting instead of growing over the whole session.
+    fn forget_consumed(&mut self, priority_ts: u64) {
+        self.consumed_by_us.remove(&priority_ts);
     }
 
     pub fn diagnostics(&self) -> (u64, u64) {
@@ -166,6 +211,7 @@ impl SimBookImpl {
         if now_empty {
             self.levels_mut(side).remove(&price_raw);
         }
+        self.forget_consumed(priority_ts);
         self.state = BookState::Ok;
     }
 
@@ -204,6 +250,7 @@ impl SimBookImpl {
         }
         self.bids.clear();
         self.asks.clear();
+        self.consumed_by_us.clear();
         self.state = BookState::Ok;
         caught
     }
@@ -226,6 +273,10 @@ impl SimBookImpl {
     /// `SimExchange::apply_market_event`).
     fn apply_trade(&mut self, side: Side, price_raw: i64, matched_priority_ts: u64, mut trade_qty_raw: i64) -> Vec<(u64, i64)> {
         let mut fills = Vec::new();
+        // Real slots this trade fully consumed -- `consumed_by_us` entries
+        // for them are dropped once `lvl`'s borrow below has ended (can't
+        // call back into `self` while `lvl` derives from it).
+        let mut fully_traded_real: Vec<u64> = Vec::new();
         let Some(lvl) = self.levels_mut(side).get_mut(&price_raw) else {
             self.diag_trade_misses += 1;
             self.state = BookState::Ok;
@@ -251,6 +302,9 @@ impl SimBookImpl {
                     trade_qty_raw -= slot_qty;
                     lvl.qty -= slot_qty;
                     lvl.orders.remove(pos); // shifts next into `pos` -- don't advance
+                    if let SlotOwner::Real(pts) = owner {
+                        fully_traded_real.push(pts);
+                    }
                 }
             }
         } else {
@@ -273,11 +327,17 @@ impl SimBookImpl {
                     trade_qty_raw -= front_qty;
                     lvl.qty -= front_qty;
                     lvl.orders.pop_front();
+                    if let SlotOwner::Real(pts) = owner {
+                        fully_traded_real.push(pts);
+                    }
                 }
             }
         }
         if !consumed_any {
             self.diag_trade_misses += 1;
+        }
+        for pts in fully_traded_real {
+            self.forget_consumed(pts);
         }
         // Prune the level if this trade emptied it -- same reasoning as
         // `remove_real` (keeps best_bid/best_ask/qty_ahead_of scans
@@ -392,7 +452,16 @@ impl SimBookImpl {
             if slot.owner == SlotOwner::Sim(sim_id) {
                 return Some(ahead);
             }
-            ahead += slot.qty;
+            // A real slot's own `qty` never reflects our aggressive
+            // fills (see `consumed_by_us`'s doc comment) -- for *our*
+            // queue-position accounting, net out what we've already
+            // taken from it, so an order of ours that fills virtually
+            // ahead of another resting order of ours is correctly no
+            // longer "ahead" of it.
+            ahead += match slot.owner {
+                SlotOwner::Real(pts) => self.real_effective_remaining(slot.qty, pts),
+                SlotOwner::Sim(_) => slot.qty,
+            };
         }
         None
     }
@@ -463,7 +532,10 @@ impl MboBook for SimBookImpl {
             if matches {
                 return Some(ahead);
             }
-            ahead += slot.qty;
+            ahead += match slot.owner {
+                SlotOwner::Real(pts) => self.real_effective_remaining(slot.qty, pts),
+                SlotOwner::Sim(_) => slot.qty,
+            };
         }
         None
     }
@@ -684,12 +756,17 @@ pub enum CancelReason {
 /// own quantity (bounded by that message, trivially satisfying "never
 /// exceed volume that actually traded there"); an `Aggressive` fill (IOC/
 /// MarketToLimit/marketable Limit sweeping the resting book on arrival)
-/// consumes real *resting* quantity that was genuinely in the book at
-/// that instant, which is legitimate and non-fabricating but is **not**
-/// tied to a specific real Trade message -- it is D21's acknowledged
-/// "adverse selection" leak #3 ("you would have absorbed flow that
-/// historically went elsewhere"), an accepted phase-1 approximation, not
-/// hidden here.
+/// is bounded by real *resting* quantity that was genuinely in the book
+/// at that instant, same as before, but (2026-09-03 on) no longer
+/// physically removes it -- see `SimBookImpl::sweep_opposite`. This
+/// closes D21's leak #3 ("you would have absorbed flow that historically
+/// went elsewhere") for the *replay's* book: subsequent real events see
+/// that liquidity exactly as recorded. The leak isn't fully gone, though
+/// -- our own fill genuinely happened, so a second aggressive order of
+/// *ours* sweeping the same level, or the fact that the historical tape
+/// may independently trade through it too, can still award the same
+/// resting quantity to more than one taker in this simulation (accepted:
+/// see simulator_user_doc.md §5's "no market impact" discussion).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FillKind {
     Passive,
@@ -860,7 +937,10 @@ pub struct AuditLog {
 
 /// One participant consumed by an aggressive sweep, with the evidence
 /// needed for the invariant #1 (aggressive variant) ledger: how much was
-/// genuinely resting at that price *before* this sweep touched it.
+/// genuinely resting at that price *before* this sweep touched it -- for
+/// a real slot (2026-09-03 on), that's its wire `qty` net of whatever
+/// we'd already virtually taken from it earlier in the run, not the raw
+/// wire value (see `SimBookImpl::consumed_by_us`).
 #[derive(Debug, Clone, Copy)]
 struct SweptSlot {
     price_raw: i64,
@@ -884,12 +964,31 @@ impl SimBookImpl {
     /// "executes available" -- bounded only by what is *currently*
     /// resting, a single-pass snapshot in time, never sweeping into
     /// liquidity that arrives later -- see FR-B22).
+    ///
+    /// **Fill estimator, not matching engine (2026-09-03).** A real
+    /// slot's `qty` and FIFO position are read here, never written: we
+    /// record how much of it we took in `consumed_by_us`, but the slot
+    /// itself is left exactly as the replay produced it, so every
+    /// subsequent real event (a Delete, a genuine Trade) still finds the
+    /// book precisely as history recorded -- our own presence never
+    /// perturbs it (revises D21's leak #3, previously modelled by
+    /// physically removing swept real quantity; see
+    /// `simulator_user_doc.md` §5). One of *our own* other resting sim
+    /// orders hit by the sweep is a real mechanical self-trade, though
+    /// (STP is FR-B25, out of scope) -- those slots are still genuinely
+    /// mutated, same as before.
     fn sweep_opposite(&mut self, aggressor_side: Side, price_limit_raw: Option<i64>, mut qty: i64) -> Vec<SweptSlot> {
         let mut out = Vec::new();
         let opposite_prices: Vec<i64> = match aggressor_side {
             Side::Buy => self.asks.keys().copied().collect(),   // ascending: best ask first
             Side::Sell => self.bids.keys().rev().copied().collect(), // descending: best bid first
         };
+        // Disjoint field borrows -- `consumed_by_us` is read/written
+        // alongside `bids`/`asks` throughout this walk (see the fn doc
+        // comment), which a `self.method()` call can't do once `map`
+        // below is alive (opaque to the borrow checker), but a direct
+        // field-pattern destructure like this can.
+        let SimBookImpl { bids, asks, consumed_by_us, .. } = self;
         for price in opposite_prices {
             if qty <= 0 {
                 break;
@@ -903,26 +1002,51 @@ impl SimBookImpl {
                 break;
             }
             let map = match aggressor_side {
-                Side::Buy => &mut self.asks,
-                Side::Sell => &mut self.bids,
+                Side::Buy => &mut *asks,
+                Side::Sell => &mut *bids,
             };
             let mut empty_after = false;
             if let Some(lvl) = map.get_mut(&price) {
-                let level_qty_before = lvl.qty;
-                while qty > 0 {
-                    let Some(front) = lvl.orders.front().copied() else { break };
-                    let taken = front.qty.min(qty);
-                    out.push(SweptSlot { price_raw: price, level_qty_before, owner: front.owner, taken });
-                    if front.qty > qty {
-                        lvl.orders[0].qty -= taken;
-                        lvl.qty -= taken;
-                        qty -= taken;
-                    } else {
-                        lvl.qty -= front.qty;
-                        lvl.orders.pop_front();
-                        qty -= front.qty;
+                let mut idx = 0usize;
+                while qty > 0 && idx < lvl.orders.len() {
+                    let slot = lvl.orders[idx];
+                    match slot.owner {
+                        SlotOwner::Real(pts) => {
+                            let already_taken = consumed_by_us.get(&pts).copied().unwrap_or(0);
+                            let effective_remaining = (slot.qty - already_taken).max(0);
+                            if effective_remaining <= 0 {
+                                // Already virtually exhausted by an
+                                // earlier sweep this run -- move on to
+                                // whatever's behind it, real slot itself
+                                // untouched.
+                                idx += 1;
+                                continue;
+                            }
+                            let taken = effective_remaining.min(qty);
+                            out.push(SweptSlot { price_raw: price, level_qty_before: effective_remaining, owner: slot.owner, taken });
+                            *consumed_by_us.entry(pts).or_insert(0) += taken;
+                            qty -= taken;
+                            idx += 1;
+                        }
+                        SlotOwner::Sim(_) => {
+                            let taken = slot.qty.min(qty);
+                            out.push(SweptSlot { price_raw: price, level_qty_before: slot.qty, owner: slot.owner, taken });
+                            if slot.qty > qty {
+                                lvl.orders[idx].qty -= taken;
+                                lvl.qty -= taken;
+                                qty -= taken;
+                                idx += 1;
+                            } else {
+                                lvl.qty -= slot.qty;
+                                lvl.orders.remove(idx); // shifts next into `idx` -- don't advance
+                                qty -= slot.qty;
+                            }
+                        }
                     }
                 }
+                // Only ever true if every slot here was one of our own
+                // (Sim) and all got fully swept -- a level holding any
+                // real slot never reports empty through this path.
                 empty_after = lvl.orders.is_empty();
             }
             if empty_after {
@@ -2132,6 +2256,70 @@ mod tests {
         // report.
         let cancel_reports = ex.cancel(1, 10);
         assert!(cancel_reports.is_empty(), "cancelling a still-in-flight order is a safe no-op, same as cancelling an unknown order");
+    }
+
+    // ---- Fill estimator, not matching engine (2026-09-03) ----
+
+    #[test]
+    fn aggressive_fill_leaves_real_book_depth_untouched() {
+        let mut ex = exch();
+        ex.apply_market_event(&add(DSide::Sell, 150, 10, 1), 0);
+        let reports = ex.submit(NewOrderRequest { client_order_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::Ioc(Price(150)), qty: Qty(10) }, 0);
+        assert!(reports.iter().any(|r| matches!(r, ExecReport::Filled { qty: Qty(10), kind: FillKind::Aggressive, .. })), "our order genuinely fills");
+        let book = ex.book_impl(IID).unwrap();
+        assert_eq!(book.best_ask(), Some(PriceLevel { price: Price(150), qty: Qty(10), order_count: 1 }), "the real resting order our fill was matched against is still fully visible in the book -- our own trading never perturbs the replay's ground truth");
+        assert_eq!(book.qty_at_price(Side::Sell, Price(150)), Qty(10));
+    }
+
+    #[test]
+    fn a_second_aggressive_order_cannot_reclaim_liquidity_we_already_virtually_took() {
+        let mut ex = exch();
+        ex.apply_market_event(&add(DSide::Sell, 150, 10, 1), 0);
+        let first = ex.submit(NewOrderRequest { client_order_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::Ioc(Price(150)), qty: Qty(10) }, 0);
+        assert!(first.iter().any(|r| matches!(r, ExecReport::Filled { qty: Qty(10), .. })));
+        // The book still displays the real order at full size (previous
+        // test) -- but a second aggressive order must not be able to eat
+        // it a second time, or we'd be fabricating liquidity that was
+        // never really there twice over.
+        let second = ex.submit(NewOrderRequest { client_order_id: 2, instrument: IID, side: Side::Buy, order_type: OrderType::Ioc(Price(150)), qty: Qty(10) }, 0);
+        assert!(!second.iter().any(|r| matches!(r, ExecReport::Filled { .. })), "already virtually exhausted -- must not double-fill: {second:?}");
+        assert!(second.iter().any(|r| matches!(r, ExecReport::Canceled { reason: CancelReason::IocRemainder, .. })));
+    }
+
+    #[test]
+    fn consumed_ledger_is_forgotten_once_the_real_order_it_tracked_is_gone() {
+        let mut ex = exch();
+        ex.apply_market_event(&add(DSide::Sell, 150, 10, 1), 0); // priority_ts=1
+        ex.submit(NewOrderRequest { client_order_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::Ioc(Price(150)), qty: Qty(6) }, 0);
+        // Real order 1 (still showing 10 in the book) is now deleted for
+        // real, e.g. the trader behind it pulled the remainder.
+        ex.apply_market_event(&DecodedMessage::OrderDelete(OrderDelete { seq: 0, security_id: 1, side: DSide::Sell, price: DPrice(150), qty: DQty(10), priority_ts: 1, event_time: 0 }), 0);
+        assert_eq!(ex.book_impl(IID).unwrap().best_ask(), None, "the level is gone -- real state, unaffected by our earlier virtual fill");
+        // A brand new real order arrives at the same price with a fresh
+        // priority_ts. It must be fully available -- no leftover
+        // consumption ledger entry from the deleted order should bleed
+        // into it.
+        ex.apply_market_event(&add(DSide::Sell, 150, 10, 2), 0);
+        let reports = ex.submit(NewOrderRequest { client_order_id: 2, instrument: IID, side: Side::Buy, order_type: OrderType::Ioc(Price(150)), qty: Qty(10) }, 0);
+        assert!(reports.iter().any(|r| matches!(r, ExecReport::Filled { qty: Qty(10), .. })), "the new real order is untouched by the old, now-deleted order's ledger entry: {reports:?}");
+    }
+
+    #[test]
+    fn our_own_resting_order_sees_reduced_qty_ahead_after_our_earlier_aggressive_fill() {
+        let mut ex = exch();
+        // A real sell order rests 20 lots at 150.
+        ex.apply_market_event(&add(DSide::Sell, 150, 20, 1), 0);
+        // We aggressively buy 12 of it -- the real slot stays displayed
+        // at 20 (previous tests), but we genuinely hold 12 of it now.
+        ex.submit(NewOrderRequest { client_order_id: 1, instrument: IID, side: Side::Buy, order_type: OrderType::Ioc(Price(150)), qty: Qty(12) }, 0);
+        // We now rest our *own* sell order behind that same real order,
+        // at the same price.
+        let reports = ex.submit(NewOrderRequest { client_order_id: 2, instrument: IID, side: Side::Sell, order_type: OrderType::LimitDay(Price(150)), qty: Qty(5) }, 0);
+        assert!(reports.iter().any(|r| matches!(r, ExecReport::Resting { .. })));
+        // Only 8 of the real order's 20 lots are genuinely still ahead of
+        // us in the queue -- the other 12 are ours, already accounted
+        // for, not phantom liquidity still blocking our own order.
+        assert_eq!(ex.resting_qty_ahead(2), Some(8), "qty_ahead must net out our own earlier virtual consumption of the real slot ahead of us");
     }
 }
 

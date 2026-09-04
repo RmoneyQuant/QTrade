@@ -28,6 +28,16 @@
 mod types;
 #[path = "../decoder/decoder.rs"]
 mod decoder;
+// Not used by this binary's own scenarios below -- only by execution.rs's
+// own test module (own-order injection, 2026-09-03), which needs a real
+// `book::BookBuilder` to prove the injected messages actually feed one
+// correctly. Declared here purely so `cargo test --bin execution-validate`
+// compiles that test module at all -- same reason `simulator`/`logging`
+// are declared below despite this binary's own scenarios not touching
+// every corner of them either.
+#[allow(dead_code)]
+#[path = "../book/book.rs"]
+mod book;
 #[path = "../simulator/simulator.rs"]
 mod simulator;
 #[path = "execution.rs"]
