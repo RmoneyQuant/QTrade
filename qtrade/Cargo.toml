@@ -3,6 +3,14 @@ name = "qtrade"
 version = "0.1.0"
 edition = "2021"
 
+# The strategy-facing library (2026-09-04) -- see src/lib.rs's own
+# header. Everything `main.rs` used to do inline now lives here, behind
+# `run_backtest`, so an external crate can `impl Strategy` and depend on
+# `qtrade` instead of forking this source tree.
+[lib]
+name = "qtrade"
+path = "src/lib.rs"
+
 # The one real entry point (2026-08-25: merged with the former
 # `backtester` bin -- see main.rs's own header and main_user_doc.md for
 # why. `main.rs` was frozen early as a decode-only CLI purely as a

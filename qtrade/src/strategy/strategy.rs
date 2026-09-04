@@ -177,7 +177,13 @@ pub struct Ctx<'a> {
 }
 
 impl<'a> Ctx<'a> {
-    pub fn new(cache: &'a Cache, engine: &'a mut ExecutionEngine, venue: &'a mut SimExchange, now_ns: u64, strategy_id: StrategyId, can_submit: bool) -> Self {
+    /// `pub(crate)`, not `pub` (2026-09-04, library surface pass): every
+    /// argument type here (`Cache`, `ExecutionEngine`, `SimExchange`) is
+    /// crate-internal, so an external strategy author could never call
+    /// this anyway -- they only ever *receive* `&mut Ctx` as a callback
+    /// parameter. Only `event_dispatcher.rs`/`control_dispatcher.rs`/
+    /// `lib.rs`'s own `run_backtest` construct one.
+    pub(crate) fn new(cache: &'a Cache, engine: &'a mut ExecutionEngine, venue: &'a mut SimExchange, now_ns: u64, strategy_id: StrategyId, can_submit: bool) -> Self {
         Ctx { cache, engine, venue, now_ns, strategy_id, can_submit, pending: ExecOutcome::default() }
     }
 
@@ -333,7 +339,10 @@ pub struct StartCtx<'a> {
 }
 
 impl<'a> StartCtx<'a> {
-    pub fn new(resolver: &'a dyn Fn(&str) -> Option<InstrumentId>, event_dispatcher: &'a mut EventDispatcher, control_dispatcher: &'a mut ControlDispatcher, my_id: SubscriberId) -> Self {
+    /// `pub(crate)`, same reasoning as `Ctx::new` -- `EventDispatcher`/
+    /// `ControlDispatcher` are crate-internal, only `lib.rs`'s
+    /// `run_backtest` ever constructs one.
+    pub(crate) fn new(resolver: &'a dyn Fn(&str) -> Option<InstrumentId>, event_dispatcher: &'a mut EventDispatcher, control_dispatcher: &'a mut ControlDispatcher, my_id: SubscriberId) -> Self {
         StartCtx { resolver, event_dispatcher, control_dispatcher, my_id }
     }
 
