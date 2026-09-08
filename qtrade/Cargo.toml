@@ -90,6 +90,27 @@ path = "src/feed_replay/validate.rs"
 name = "cme-decoder"
 path = "src/cme_decoder/cme_decoder.rs"
 
+# Coverage-audit tool for the EOBI-only 100%-coverage effort (2026-09-07):
+# streams one or more real capture files and tallies decoded message
+# counts by type, specifically to prove zero `Unknown` messages remain
+# after adding decoders for 13201/13300/13301/13302/13604. Not part of
+# any normal run path -- ad hoc, run by hand against real data. Same
+# reason as the other harnesses above for being a separate [[bin]]
+# instead of a #[test] (streams multi-gigabyte real files, prints a
+# report, isn't a pass/fail assertion).
+[[bin]]
+name = "decoder-tally"
+path = "src/decoder/tally.rs"
+
+# Tick-flow benchmark strategy (2026-09-08): not a trading strategy --
+# a simple, understood, repeating submit/cancel pattern (every 10 ticks,
+# submit; cancel if unfilled after 5) run against a real full day, purely
+# to get an honest reference wall-clock time for "how long should a
+# backtest like this take" -- see tick_flow_bench.rs's own header.
+[[bin]]
+name = "tick-flow-bench"
+path = "src/strategy/tick_flow_bench/main.rs"
+
 [dependencies]
 tracing = "0.1.44"
 tracing-appender = "0.2.5"

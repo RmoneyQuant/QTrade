@@ -48,7 +48,7 @@ use crate::logging;
 use crate::simulator::{self, CancelReason as VenueCancelReason, ExecReport, FillKind, NewOrderRequest, OrderType, OtrConfig, RejectReason, SimExchange};
 use crate::types::{Instrument, InstrumentId, Lots, Price, Qty, Side};
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
 /// Raw wire price / this = rupees. The same constant `decoder`'s own
@@ -1076,6 +1076,17 @@ pub struct ExecutionEngine {
     /// `on_market_event` and the bug this fixed in
     /// execution_user_doc.md).
     pre_event_qty_ahead: HashMap<u64, i64>,
+    /// Exactly the `client_order_id`s for which `orders.get(id).state
+    /// .is_open()` is currently true -- kept in sync at every state
+    /// transition below (2026-09-08 fix, see `prepare_for_market_event`'s
+    /// doc comment for the bug this closes). `orders` itself is never
+    /// pruned (every order, filled/canceled/whatever, stays there for the
+    /// life of the run -- other code needs to look old ones up by id), so
+    /// scanning `orders` directly for "is it open" gets more expensive as
+    /// the run goes on; this set stays exactly as large as the number of
+    /// orders truly live right now, however many have come and gone
+    /// before it.
+    open_order_ids: HashSet<u64>,
     venue_submit_calls: u64,
     venue_cancel_calls: u64,
     venue_modify_calls: u64,
@@ -1124,6 +1135,7 @@ impl ExecutionEngine {
             portfolio: Portfolio::default(),
             orders: HashMap::new(),
             pre_event_qty_ahead: HashMap::new(),
+            open_order_ids: HashSet::new(),
             venue_submit_calls: 0,
             venue_cancel_calls: 0,
             venue_modify_calls: 0,
@@ -1411,6 +1423,7 @@ impl ExecutionEngine {
             return false;
         }
         order.state = OrderState::PendingCancel;
+        self.open_order_ids.insert(client_order_id);
         self.log_event(client_order_id, "cancel requested", OrderState::PendingCancel, now_ns);
         true
     }
@@ -1473,6 +1486,7 @@ impl ExecutionEngine {
             return false;
         }
         order.state = OrderState::PendingUpdate;
+        self.open_order_ids.insert(client_order_id);
         self.log_event(client_order_id, "modify requested", OrderState::PendingUpdate, now_ns);
         true
     }
@@ -1511,6 +1525,7 @@ impl ExecutionEngine {
         }
         order.state = OrderState::Expired;
         self.pre_event_qty_ahead.remove(&client_order_id);
+        self.open_order_ids.remove(&client_order_id);
         self.log_event(client_order_id, "expired", OrderState::Expired, now_ns);
         true
     }
@@ -1543,9 +1558,30 @@ impl ExecutionEngine {
     /// `pre_event_qty_ahead`'s own long-standing doc comment) and
     /// counting the event for reporting. No gate exists here, same as
     /// before -- a market event always reaches the venue, unconditionally.
+    ///
+    /// **2026-09-08 fix, real bug, found by timing a full trading day for
+    /// the first time (see execution_user_doc.md):** this used to iterate
+    /// `self.orders` directly -- *every* order ever submitted this run,
+    /// not just the currently-open ones, since `orders` is never pruned
+    /// (other code needs to look up terminal orders by id too). Called on
+    /// every single market event, that made this method's cost grow with
+    /// how much the strategy had traded *so far*, not stay flat -- a
+    /// strategy that keeps an order or two working all day turned a
+    /// should-be-linear full-day backtest quadratic: a real, measured
+    /// >15x throughput collapse over one day for a strategy that
+    /// resubmits every ~10 ticks (233M-message file, 246K records/s in
+    /// the first 10M records, 16K records/s by 45M). `open_order_ids` is
+    /// the fix -- kept in sync at every `order.state` transition (see
+    /// that field's own doc comment) so this scan is always exactly as
+    /// large as the number of orders genuinely live right now, no matter
+    /// how many have come and gone before.
     pub fn prepare_for_market_event(&mut self, venue: &SimExchange) {
-        for (&id, order) in self.orders.iter() {
-            if order.state.is_open() {
+        // `self.orders.get(&id)` here is a defensive re-check, not a
+        // reintroduction of the old cost -- `open_order_ids` is small
+        // (bounded by orders truly live right now), so this is one O(1)
+        // hash lookup per live order, not a scan of the whole history.
+        for &id in self.open_order_ids.iter() {
+            if self.orders.get(&id).is_some_and(|o| o.state.is_open()) {
                 if let Some(ahead) = venue.resting_qty_ahead(id) {
                     self.pre_event_qty_ahead.entry(id).or_insert(ahead);
                 }
@@ -1691,6 +1727,7 @@ impl ExecutionEngine {
                                 order.state = OrderState::Rejected;
                                 order.reject_reason = Some(reason);
                                 self.pre_event_qty_ahead.remove(&client_order_id);
+                                self.open_order_ids.remove(&client_order_id);
                             }
                             OrderState::PendingUpdate => {
                                 // "Modify accepted or rejected -- either
@@ -1700,6 +1737,7 @@ impl ExecutionEngine {
                                 // order itself.
                                 order.state = if order.filled_qty.0 > 0 { OrderState::PartiallyFilled } else { OrderState::Accepted };
                                 order.reject_reason = Some(reason);
+                                self.open_order_ids.insert(client_order_id);
                             }
                             _ => {} // already terminal or otherwise not awaiting this -- ignore
                         }
@@ -1742,6 +1780,7 @@ impl ExecutionEngine {
                             };
                             order.state = if order.filled_qty.0 > 0 { OrderState::PartiallyFilled } else { OrderState::Accepted };
                             logged_state = order.state;
+                            self.open_order_ids.insert(client_order_id);
                             order.cache_injected_at = Some((handle.price, handle.priority_ts));
                             injection = Some((order.instrument, order.side, prev_injected_at, prev_leaves_qty));
                         }
@@ -1767,6 +1806,7 @@ impl ExecutionEngine {
                             order.state = OrderState::Canceled;
                             order.cancel_reason = Some(map_cancel_reason(reason));
                             self.pre_event_qty_ahead.remove(&client_order_id);
+                            self.open_order_ids.remove(&client_order_id);
                             // Own-order injection (2026-09-03): the slot
                             // we published earlier, if any, is gone for
                             // good -- tell `cache` the same way a real
@@ -1825,6 +1865,11 @@ impl ExecutionEngine {
             order.state = if order.leaves_qty.0 <= 0 { OrderState::Filled } else { OrderState::PartiallyFilled };
             logged_state = order.state;
             leaves_qty = order.leaves_qty.0;
+            if order.state == OrderState::Filled {
+                self.open_order_ids.remove(&client_order_id);
+            } else {
+                self.open_order_ids.insert(client_order_id);
+            }
             // A fill against a slot we'd never published (a pure
             // marketable fill against *real* liquidity, `cache_injected_at
             // == None`) needs no injection at all -- consistent with

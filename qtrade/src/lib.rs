@@ -369,8 +369,8 @@ pub fn run_backtest<S: Strategy + 'static>(config_path: &Path, underlyings: &[&s
             drain_cache_injections(&mut engine, &mut sched);
         }
 
-        sched.schedule(exchange_ts, EventClass::MarketData, EventPayload::MarketData { target: Target::SimExchange, message: *ev.event, seq_no: ev.seq_no, exchange_ts: ev.exchange_ts, recorder_ts: ev.recorder_ts });
-        sched.schedule(recorder_ts, EventClass::MarketData, EventPayload::MarketData { target: Target::Cache, message: *ev.event, seq_no: ev.seq_no, exchange_ts: ev.exchange_ts, recorder_ts: ev.recorder_ts });
+        sched.schedule(exchange_ts, EventClass::MarketData, EventPayload::MarketData { target: Target::SimExchange, message: ev.event.clone(), seq_no: ev.seq_no, exchange_ts: ev.exchange_ts, recorder_ts: ev.recorder_ts });
+        sched.schedule(recorder_ts, EventClass::MarketData, EventPayload::MarketData { target: Target::Cache, message: ev.event.clone(), seq_no: ev.seq_no, exchange_ts: ev.exchange_ts, recorder_ts: ev.recorder_ts });
     })
     .map_err(|e| format!("failed to open capture stream(s) {capture_paths:?}: {e}"))?;
 
