@@ -33,14 +33,13 @@
 //! Every `on_order_update` / `on_fill` is logged verbatim so the state
 //! transitions are visible in order in `events.log`.
 
-use crate::book::Book;
-use crate::decoder::Trade;
-use crate::event_dispatcher::Depth;
-use crate::execution::{FillRecord, OrderEventRecord};
-use crate::logging;
-use crate::simulator::OrderType;
-use crate::strategy::{Ctx, StartCtx, Strategy};
-use crate::types::{InstrumentId, Lots, Price, Qty, Side};
+// This strategy now compiles as an example against the published
+// `qtrade` library (2026-09-04) -- every one of these used to be a
+// `crate::` path into main.rs's own module tree; they're `qtrade::`
+// paths now, exactly what an external strategy author's own crate would
+// write. Nothing else in this file changed for the move.
+use qtrade::logging;
+use qtrade::{Book, Ctx, Depth, FillRecord, InstrumentId, Lots, OrderEventRecord, OrderType, Price, Qty, Side, StartCtx, Strategy, Trade};
 
 pub const UNDERLYINGS: &[&str] = &["NATURALGAS"];
 
@@ -215,7 +214,7 @@ impl OrderLifecycleDemo {
             //    the log says which happened.
             Step::PartialFill => {
                 let cap_lots = Self::max_order_lots(ctx, instrument);
-                let touch_lots = ask.qty.0 / crate::types::RAW_QTY_PER_LOT;
+                let touch_lots = ask.qty.0 / qtrade::RAW_QTY_PER_LOT;
                 if touch_lots >= cap_lots && self.partial_attempts < PARTIAL_MAX_ATTEMPTS {
                     // Touch is at least as deep as the most we may send --
                     // a full fill, not a partial. Wait for a thinner one
@@ -265,13 +264,15 @@ impl OrderLifecycleDemo {
 impl Strategy for OrderLifecycleDemo {
     fn on_start(&mut self, ctx: &mut StartCtx) {
         for name in UNDERLYINGS {
-            if let Some(id) = ctx.resolve(name) {
-                self.instrument = Some(id);
-                ctx.subscribe(id, Depth::Bbo);
-                tracing::info!("{}", logging::line("OrderLifecycleDemo", None, "SUBSCRIBE", &format!("{name} -- native/MCX token id={}, depth=Bbo", id.0)));
-            } else {
-                tracing::info!("{}", logging::line("OrderLifecycleDemo", None, "SUBSCRIBE", &format!("{name} -- NOT resolved in this day's refdata")));
-            }
+            // `ctx.resolve` panics loudly on its own if `name` doesn't
+            // resolve (2026-09-09: qtrade's own rule -- a strategy's
+            // declared intent either resolves to a real instrument or the
+            // run stops, never silently proceeds short one) -- no local
+            // else-branch needed any more.
+            let id = ctx.resolve(name);
+            self.instrument = Some(id);
+            ctx.subscribe(id, Depth::Bbo);
+            tracing::info!("{}", logging::line("OrderLifecycleDemo", None, "SUBSCRIBE", &format!("{name} -- native/MCX token id={}, depth=Bbo", id.0)));
         }
         tracing::info!("{}", logging::line("OrderLifecycleDemo", None, "START", "order-lifecycle demo armed -- first scripted action at 10:05 IST"));
     }
@@ -296,7 +297,7 @@ impl Strategy for OrderLifecycleDemo {
                     fill.client_order_id,
                     fill.side,
                     fill.price.0 as f64 / RUPEE_RAW,
-                    fill.qty.0 / crate::types::RAW_QTY_PER_LOT,
+                    fill.qty.0 / qtrade::RAW_QTY_PER_LOT,
                     fill.kind,
                     fill.queue_position_at_fill.map(|q| q.to_string()).unwrap_or_else(|| "--".into()),
                 )

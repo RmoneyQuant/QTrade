@@ -131,6 +131,17 @@ impl EventDispatcher {
     /// own doc comment gave. Pre-populates this key's snapshot slot so
     /// the hot path's `get_mut` in `on_book_touched` always finds an
     /// existing entry.
+    /// Every distinct instrument any subscriber has declared interest in
+    /// via `subscribe`, no particular order. `lib.rs::run_backtest`
+    /// (2026-09-09 restructuring) reads this back right after `on_start`
+    /// returns to learn the real tracked-instrument set -- the strategy's
+    /// own `subscribe` calls are now the single source of truth for
+    /// "which instruments does this run need," not a caller-supplied
+    /// string list decided before the strategy ever runs.
+    pub fn subscribed_instruments(&self) -> Vec<InstrumentId> {
+        self.by_instrument.keys().copied().collect()
+    }
+
     pub fn subscribe(&mut self, id: SubscriberId, instrument: InstrumentId, depth: Depth) {
         self.subs_by_key.entry((instrument, depth)).or_default().push(id);
         self.by_instrument.entry(instrument).or_default().push(depth);

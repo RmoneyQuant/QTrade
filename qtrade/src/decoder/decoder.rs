@@ -520,8 +520,180 @@ impl fmt::Display for InstrumentInfo {
     }
 }
 
-/// A template id we saw but have no verified struct layout for (e.g.
-/// 13300/13301 -- not defined in references/MCX_Feeder.h). Skipped
+/// TemplateID **13201** (`MarketDataTrade`, MsgType=U22). Per the spec's
+/// own note (mcx-eobi-v1-2.md, "Trade Report = 13201", line 1169):
+/// "In case of Market Reset Events due to Technical Interruptions, Trade
+/// Report message is published for traded contracts" -- an out-of-band,
+/// event-driven report, not part of ordinary order-book trade flow (that's
+/// `Trade`, 13104/13105, which fires on every real match). Field layout
+/// transcribed directly from that table; offsets are from the start of
+/// the message, including its 8-byte header, same convention verified
+/// against real bytes for every other message in this file (see
+/// `InstrumentInfo`'s doc comment for how that convention was confirmed).
+/// Not yet cross-checked against a real occurrence in capture data --
+/// this message type is rare (only fires on a technical market reset).
+#[derive(Debug, Clone, Copy)]
+pub struct TradeReport {
+    pub seq: u32,
+    pub security_id: i64,
+    pub event_time: u64,
+    pub last_qty: Qty,
+    pub last_price: Price,
+    pub trd_match_id: u32,
+    pub price: Price,
+    pub match_type: u8,
+    pub match_sub_type: u8,
+    pub algorithmic_trade_indicator: u8,
+    pub trade_condition: u16,
+}
+
+impl fmt::Display for TradeReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "seq={:<10} TRADE_REPORT       Token={:<10} Price={} Qty={} MatchID={}",
+            self.seq, self.security_id, self.last_price, self.last_qty, self.trd_match_id
+        )
+    }
+}
+
+/// TemplateID **13300** (`TradingSessionStatus`, MsgType=h). Whole-*product*
+/// scope (a market-segment-wide trading-state transition), not per
+/// instrument -- there is genuinely no `SecurityID` field on this message,
+/// per its own field table (mcx-eobi-v1-2.md, line 900); which product it
+/// applies to comes from the surrounding packet/segment context, same as
+/// `SnapshotProductSummary` (13600). `trad_ses_status`: 1=Halted,
+/// 2=Open, 3=Closed.
+#[derive(Debug, Clone, Copy)]
+pub struct ProductStateChange {
+    pub seq: u32,
+    pub trading_session_id: u8,
+    pub trading_session_sub_id: u8,
+    pub trad_ses_status: u8,
+    pub market_condition: u8,
+    pub fast_market_indicator: u8,
+    pub event_time: u64,
+}
+
+impl fmt::Display for ProductStateChange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let status = match self.trad_ses_status {
+            1 => "HALTED",
+            2 => "OPEN",
+            3 => "CLOSED",
+            _ => "?",
+        };
+        write!(
+            f,
+            "seq={:<10} PRODUCT_STATE      Status={:<7} Session={} SubSession={}",
+            self.seq, status, self.trading_session_id, self.trading_session_sub_id
+        )
+    }
+}
+
+/// TemplateID **13301** (`SecurityStatus`, MsgType=f). Per-instrument
+/// trading-state transition; also "informs participants about intra-day
+/// expiration of instruments" (mcx-eobi-v1-2.md, line 993).
+/// `security_status`: 1=Active, 2=Inactive, 4=Expired, 9=Suspended.
+/// `security_trading_status`: 2=Trading Halt, 200=Closed, 201=Restricted,
+/// 202=Book, 203=Continuous.
+#[derive(Debug, Clone, Copy)]
+pub struct InstrumentStateChange {
+    pub seq: u32,
+    pub security_id: i64,
+    pub security_status: u8,
+    pub security_trading_status: u8,
+    pub event_time: u64,
+}
+
+impl fmt::Display for InstrumentStateChange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "seq={:<10} INSTRUMENT_STATE   Token={:<10} Status={} TradingStatus={}",
+            self.seq, self.security_id, self.security_status, self.security_trading_status
+        )
+    }
+}
+
+/// One entry of the `SecMassStatGrp` repeating group inside
+/// `MassInstrumentStateChange` (13302) -- the *exception list*:
+/// instruments within the announced scope whose new state differs from
+/// the blanket `mass_status`/`mass_trading_status` on the parent message.
+/// Field layout from mcx-eobi-v1-2.md, line 937; each entry is 16 bytes
+/// wide (`SecurityID` i64 + `SecurityStatus` u8 + `SecurityTradingStatus`
+/// u8 + 6 bytes of not-used/padding fields).
+#[derive(Debug, Clone, Copy)]
+pub struct MassStatusException {
+    pub security_id: i64,
+    pub security_status: u8,
+    pub security_trading_status: u8,
+}
+
+/// TemplateID **13302** (`SecurityMassStatus`, MsgType=CO). Announces a
+/// state change for *all* instruments of a given type/complex within a
+/// product in one message (`instrument_scope`: 1=Simple Instrument,
+/// 5=Futures Spread), plus an exception list for any in-scope instrument
+/// that doesn't share the blanket new state. Field layout transcribed
+/// from mcx-eobi-v1-2.md, line 937.
+///
+/// Not `Copy` (unlike every other message in this file) because
+/// `exceptions` is a real variable-length array on the wire (count given
+/// by `NoRelatedSym`, one 16-byte record each) -- this is the one message
+/// type genuinely too large to keep as a fixed-size stack value. This is
+/// why `DecodedMessage` itself derives only `Clone`, not `Copy`, as of
+/// this message type's addition; every other consumer in the codebase
+/// already only relied on `Clone` (see `scheduler::EventPayload`, which
+/// wraps a `DecodedMessage` and was already `Clone`-only), so this cost
+/// nothing elsewhere.
+#[derive(Debug, Clone)]
+pub struct MassInstrumentStateChange {
+    pub seq: u32,
+    pub instrument_scope: u8,
+    pub mass_status: u8,
+    pub mass_trading_status: u8,
+    pub event_time: u64,
+    pub last_fragment: bool,
+    pub exceptions: Vec<MassStatusException>,
+}
+
+impl fmt::Display for MassInstrumentStateChange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "seq={:<10} MASS_INSTR_STATE   Scope={} Status={} TradingStatus={} Exceptions={}",
+            self.seq, self.instrument_scope, self.mass_status, self.mass_trading_status, self.exceptions.len()
+        )
+    }
+}
+
+/// TemplateID **13604** (`MarketDataTrade`-shaped, per its own template-id
+/// description line, but a distinct message: computed index value).
+/// **Not on the ordinary EOBI increment/snapshot channels** -- the spec is
+/// explicit (mcx-eobi-v1-2.md, line 1213): "This message does not contain
+/// Packet header and sent on Index stream." Decoded here for completeness
+/// (so a stray occurrence is never silently bucketed as `Unknown`), but a
+/// real capture of the increment/snapshot files this codebase replays may
+/// never actually contain one -- that's expected, not a bug, if so.
+#[derive(Debug, Clone, Copy)]
+pub struct IndexInfo {
+    pub seq: u32,
+    pub security_id: i64,
+    pub index_value: Price,
+    pub last_update_time: u64,
+}
+
+impl fmt::Display for IndexInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "seq={:<10} INDEX_INFO         Token={:<10} Value={} UpdatedAt={}",
+            self.seq, self.security_id, self.index_value, self.last_update_time
+        )
+    }
+}
+
+/// A template id we saw but have no verified struct layout for. Skipped
 /// safely using `body_len`, never guessed at.
 #[derive(Debug, Clone, Copy)]
 pub struct UnknownMessage {
@@ -548,7 +720,11 @@ impl fmt::Display for UnknownMessage {
 /// `pub` (enum and every variant): `book` (T03) matches on this directly
 /// to route decoded events into its per-instrument books -- see
 /// `T02_decoder.md`'s follow-up note.
-#[derive(Debug, Clone, Copy)]
+///
+/// `Clone`, not `Copy` -- see `MassInstrumentStateChange`'s doc comment
+/// for why (its `exceptions: Vec<_>` is the one field in this whole file
+/// that can't be a fixed-size stack value).
+#[derive(Debug, Clone)]
 pub enum DecodedMessage {
     PacketHeader(PacketHeader),
     Heartbeat(Heartbeat),
@@ -564,6 +740,11 @@ pub enum DecodedMessage {
     SnapshotInstrumentSummary(SnapshotInstrumentSummary),
     SnapshotOrder(SnapshotOrder),
     InstrumentInfo(InstrumentInfo),
+    TradeReport(TradeReport),
+    ProductStateChange(ProductStateChange),
+    InstrumentStateChange(InstrumentStateChange),
+    MassInstrumentStateChange(MassInstrumentStateChange),
+    IndexInfo(IndexInfo),
     Unknown(UnknownMessage),
 }
 
@@ -584,6 +765,11 @@ impl fmt::Display for DecodedMessage {
             DecodedMessage::SnapshotInstrumentSummary(m) => write!(f, "{m}"),
             DecodedMessage::SnapshotOrder(m) => write!(f, "{m}"),
             DecodedMessage::InstrumentInfo(m) => write!(f, "{m}"),
+            DecodedMessage::TradeReport(m) => write!(f, "{m}"),
+            DecodedMessage::ProductStateChange(m) => write!(f, "{m}"),
+            DecodedMessage::InstrumentStateChange(m) => write!(f, "{m}"),
+            DecodedMessage::MassInstrumentStateChange(m) => write!(f, "{m}"),
+            DecodedMessage::IndexInfo(m) => write!(f, "{m}"),
             DecodedMessage::Unknown(m) => write!(f, "{m}"),
         }
     }
@@ -704,6 +890,65 @@ pub fn decode_message(template_id: u16, seq: u32, m: &[u8]) -> DecodedMessage {
             prev_close_price: Price(i64_le(m, 24)),
             upper_daily_price_limit: Price(i64_le(m, 32)),
             lower_daily_price_limit: Price(i64_le(m, 40)),
+        }),
+        13201 if len >= 58 => DecodedMessage::TradeReport(TradeReport {
+            seq,
+            security_id: i64_le(m, 8),
+            event_time: u64_le(m, 16),
+            last_qty: Qty(i64_le(m, 24)),
+            last_price: Price(i64_le(m, 32)),
+            trd_match_id: u32_le(m, 40),
+            price: Price(i64_le(m, 44)),
+            match_type: m[52],
+            match_sub_type: m[53],
+            algorithmic_trade_indicator: m[54],
+            trade_condition: u16_le(m, 56),
+        }),
+        13300 if len >= 24 => DecodedMessage::ProductStateChange(ProductStateChange {
+            seq,
+            trading_session_id: m[8],
+            trading_session_sub_id: m[9],
+            trad_ses_status: m[10],
+            market_condition: m[11],
+            fast_market_indicator: m[12],
+            event_time: u64_le(m, 16),
+        }),
+        13301 if len >= 32 => DecodedMessage::InstrumentStateChange(InstrumentStateChange {
+            seq,
+            security_id: i64_le(m, 8),
+            security_status: m[16],
+            security_trading_status: m[17],
+            event_time: u64_le(m, 24),
+        }),
+        13302 if len >= 26 => {
+            let no_related_sym = m[25] as usize;
+            let mut exceptions = Vec::with_capacity(no_related_sym);
+            for i in 0..no_related_sym {
+                let base = 32 + i * 16;
+                if base + 10 > len {
+                    break; // truncated exception list -- keep what parsed cleanly, never guess past the buffer
+                }
+                exceptions.push(MassStatusException {
+                    security_id: i64_le(m, base),
+                    security_status: m[base + 8],
+                    security_trading_status: m[base + 9],
+                });
+            }
+            DecodedMessage::MassInstrumentStateChange(MassInstrumentStateChange {
+                seq,
+                instrument_scope: m[8],
+                mass_status: m[9],
+                mass_trading_status: m[10],
+                event_time: u64_le(m, 16),
+                last_fragment: m[24] != 0,
+                exceptions,
+            })
+        }
+        13604 if len >= 32 => DecodedMessage::IndexInfo(IndexInfo {
+            seq,
+            security_id: i64_le(m, 8),
+            index_value: Price(i64_le(m, 16)),
+            last_update_time: u64_le(m, 24),
         }),
         _ => DecodedMessage::Unknown(UnknownMessage {
             seq,

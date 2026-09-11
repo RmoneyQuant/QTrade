@@ -67,10 +67,54 @@
 //! independence -- zero knowledge of logging, strategies, or reporting,
 //! same as it has zero knowledge of `Cache`.
 
+use std::io::Write;
 use std::path::Path;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::prelude::*;
+
+/// The run banner (2026-09-11, requested directly) -- written as the
+/// very first thing in all four of a run's output files (`events.log`
+/// here in `init()`; `orders.log`/`fills.log`/`report.txt` write it
+/// themselves in `lib.rs::run_backtest`, since those are plain
+/// `fs::write`/`File::create` calls this module has no part in). Kept
+/// as one `pub const` so all four sites render byte-identical text
+/// rather than four hand-copied near-duplicates drifting apart.
+/// **Alignment note:** every content line is padded to exactly 72
+/// *visual* columns (not 72 Rust `chars`/bytes) between the two `║`
+/// borders. This matters because of one character in it: `ツ` (in the
+/// shrug) is East-Asian-Width "Wide" -- it occupies two terminal
+/// columns, not one, in any font that renders it correctly (VS Code's
+/// editor included). Padding computed with that accounted for (Python's
+/// `unicodedata.east_asian_width`, treating `W`/`F` as width 2) --
+/// padding by naive character count, as the first version of this
+/// banner did, put every line after it one column short.
+pub const BANNER: &str = "╔════════════════════════════════════════════════════════════════════════╗\n\
+║                                                                        ║\n\
+║             █████╗      ████████╗██████╗  █████╗ ██████╗ ███████╗      ║\n\
+║            ██╔══██╗        ██╔══╝██╔══██╗██╔══██╗██╔══██╗██╔════╝      ║\n\
+║             ██║  ██║        ██║   ██████╔╝███████║██║  ██║█████╗       ║\n\
+║            ╚██████║        ██║   ██╔══██╗██╔══██║██║  ██║██╔══╝        ║\n\
+║            ╚═══██║        ██║   ██║  ██║██║  ██║██████╔╝███████╗       ║\n\
+║                 ╚═╝       ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝       ║\n\
+║                                                                        ║\n\
+║                            / q T R A D E /                             ║\n\
+║                        >> MARKET ENGINE ONLINE                         ║\n\
+║                         [ PNL :: ¯\\_(ツ)_/¯ ]                          ║\n\
+║                                                                        ║\n\
+║                            // RMoney Quant                             ║\n\
+║                              engine core                               ║\n\
+║                                                                        ║\n\
+║                        \u{201c}We\u{2019}re on the same page,                        ║\n\
+║                      but the page is different.\u{201d}                       ║\n\
+║                                \u{2014} Quant                                 ║\n\
+║                                                                        ║\n\
+╚════════════════════════════════════════════════════════════════════════╝\n";
+
+/// The closing line every one of a run's four output files ends with,
+/// once `run_backtest` reaches the end without an early `Err` return --
+/// see `BANNER`'s own doc comment for why all four render identical text.
+pub const SUCCESS_FOOTER: &str = "\n>> Successfully completed backtest\n";
 
 /// Selects `tracing`'s own max-level filter. `Normal` admits `info!`/
 /// `warn!`/`error!` only (every `debug!` call becomes a cheap no-op,
@@ -120,7 +164,12 @@ impl LogLevel {
 /// is exactly the string `line()` built -- including the one real
 /// timestamp that matters, the sim clock, embedded in that string itself.
 pub fn init(level: LogLevel, events_log_path: &Path) -> std::io::Result<(WorkerGuard, WorkerGuard)> {
-    let file = std::fs::File::create(events_log_path)?;
+    let mut file = std::fs::File::create(events_log_path)?;
+    // Written synchronously, before this same `File` is handed to the
+    // non-blocking appender below -- one sequential file offset, so this
+    // is guaranteed to land before any `info!`/`debug!` line regardless
+    // of the async worker thread's own scheduling.
+    file.write_all(BANNER.as_bytes())?;
     let (file_writer, file_guard) = tracing_appender::non_blocking(file);
     let (stdout_writer, stdout_guard) = tracing_appender::non_blocking(std::io::stdout());
     let max_level = level.as_tracing_level();

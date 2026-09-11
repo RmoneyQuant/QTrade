@@ -204,13 +204,37 @@ pub enum Exercise {
     American,
 }
 
+/// MCX's own "Options Pricing Model" column (*MCX Reference Data Files
+/// (Masters) v1.2*, the field right before "Delivery Mode": "For
+/// Instrument Type 'Options'... 0-Black Scholes 3-Black76 4-Bachelier").
+/// Real, not aspirational: every real `OPTFUT`/`OPTIDX` row checked
+/// (21_08_2026, both types) reads `3` here -- Black76 is what MCX
+/// actually uses for pricing these. `Other(i64)` exists only so an
+/// unrecognized real value is preserved rather than silently coerced
+/// into one of the three known ones -- never observed so far.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PricingModel {
+    BlackScholes,
+    Black76,
+    Bachelier,
+    Other(i64),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Currency {
     Inr,
 }
 
-/// D37 -- `Future` implemented, the rest are stubs until a real need
-/// arrives for them.
+/// D37 -- `Future`/`Option` real and verified against the real BCP file
+/// (2026-09-09: both commodity- and index-linked -- `FUTCOM`/`FUTIDX`
+/// share this shape, `OPTFUT`/`OPTIDX` share `Option`'s, since MCX's own
+/// data model gives them identical columns, differing only in
+/// `underlying` naming a commodity vs. an index -- inventing a separate
+/// variant for the index-linked ones would be qtrade adding structure
+/// MCX's own data doesn't have). `Equity`/`Spread` remain stubs: no real
+/// row in `MCXScrips.bcp` models either (`COM` rows -- the closest thing
+/// to a non-tradable underlying/index reference entry -- aren't loaded
+/// at all, see `load_mcx_instruments`'s doc comment).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstrumentKind {
     Future {
@@ -226,6 +250,9 @@ pub enum InstrumentKind {
         right: Right,
         exercise: Exercise,
         settlement: Settlement,
+        /// MCX's real "Options Pricing Model" column -- see
+        /// `PricingModel`'s own doc comment.
+        pricing_model: PricingModel,
     },
     Equity {
         series: String,

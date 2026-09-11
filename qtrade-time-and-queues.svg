@@ -1,0 +1,188 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1750 1560" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <title>How time proceeds in qtrade — one order's journey through two queues</title>
+  <desc>Sequence diagram tracing one strategy order from submit to visibility in cache, across four lifelines — Scheduler, main.rs, SimExchange, Cache — showing that SimExchange never touches the Scheduler directly: main.rs polls it after every dispatch and pushes on its behalf.</desc>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#9da7b3"/>
+    </marker>
+    <marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3fb950"/>
+    </marker>
+    <marker id="aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#f5a623"/>
+    </marker>
+    <marker id="ahb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#4a9eff"/>
+    </marker>
+    <style>
+      .bg      { fill:#0d1117; }
+      .box     { fill:#161b22; stroke:#30363d; stroke-width:1.5; rx:9; }
+      .boxa    { fill:#161b22; stroke:#f5a623; stroke-width:1.3; rx:7; }
+      .title   { fill:#e6edf3; font-size:23px; font-weight:700; }
+      .sub     { fill:#9da7b3; font-size:12.5px; }
+      .colname { fill:#e6edf3; font-size:15px; font-weight:700; }
+      .colfile { fill:#7fb8ff; font-size:12px; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .colrole { fill:#9da7b3; font-size:11px; }
+      .life    { stroke:#30363d; stroke-width:1.5; stroke-dasharray:3 4; }
+      .tick    { fill:#7ee08a; font-size:11.5px; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight:600; }
+      .lab     { fill:#e6edf3; font-size:12.5px; }
+      .labm    { fill:#9da7b3; font-size:11.5px; font-style:italic; }
+      .arrow   { fill:none; stroke:#9da7b3; stroke-width:1.6; }
+      .arrowg  { fill:none; stroke:#3fb950; stroke-width:1.8; }
+      .arrowa  { fill:none; stroke:#f5a623; stroke-width:1.6; stroke-dasharray:5 4; }
+      .arrowb  { fill:none; stroke:#4a9eff; stroke-width:1.7; }
+      .dot     { fill:#e6edf3; }
+      .mono    { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .rule    { fill:#e6edf3; font-size:12.5px; }
+      .rulehead{ fill:#3fb950; font-size:13px; font-weight:700; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1750" height="1560"/>
+
+  <text class="title" x="40" y="38">How time proceeds in qtrade — one order's journey through two queues</text>
+  <text class="sub" x="40" y="60">Real numbers, one real submit, start to finish — every timestamp is epoch nanoseconds. outbound_ns = inbound_ns = 25,000 (25 microseconds, each leg).</text>
+  <text class="sub" x="40" y="76"><tspan fill="#4a9eff">Blue</tspan> = real content moving. <tspan fill="#f5a623">Amber</tspan> = SimExchange's private bookkeeping and its blank pings. <tspan fill="#3fb950">Green</tspan> = the bridge — main.rs asking, then acting.</text>
+
+  <!-- ============ EPOCH BASE CALLOUT ============ -->
+  <rect x="1240" y="14" width="470" height="64" rx="8" fill="#161b22" stroke="#4a9eff" stroke-width="1.3"/>
+  <text class="colrole" x="1256" y="32" fill="#7fb8ff">real epoch nanoseconds, not toy numbers:</text>
+  <text class="lab mono" x="1256" y="50">BASE = 1,787,287,100,000,000,000</text>
+  <text class="labm" x="1256" y="67">≈ 2026-08-21 10:08:20 IST — every tick below is BASE + Δ</text>
+
+  <!-- ============ COLUMN HEADERS ============ -->
+  <!-- Scheduler -->
+  <rect class="box" x="90" y="86" width="260" height="86"/>
+  <text class="colname" x="220" y="110" text-anchor="middle">Scheduler</text>
+  <text class="colfile" x="220" y="129" text-anchor="middle">scheduler.rs</text>
+  <text class="colrole" x="220" y="146" text-anchor="middle">the one real priority queue —</text>
+  <text class="colrole" x="220" y="160" text-anchor="middle">pop the smallest timestamp, always</text>
+
+  <!-- main.rs -->
+  <rect class="box" x="520" y="86" width="260" height="86"/>
+  <text class="colname" x="650" y="110" text-anchor="middle">main.rs</text>
+  <text class="colfile" x="650" y="129" text-anchor="middle">main.rs</text>
+  <text class="colrole" x="650" y="146" text-anchor="middle">owns the one Scheduler instance —</text>
+  <text class="colrole" x="650" y="160" text-anchor="middle">dispatch_event, sync_venue_alarms</text>
+
+  <!-- SimExchange -->
+  <rect class="box" x="950" y="86" width="260" height="86"/>
+  <text class="colname" x="1080" y="110" text-anchor="middle">SimExchange</text>
+  <text class="colfile" x="1080" y="129" text-anchor="middle">simulator.rs</text>
+  <text class="colrole" x="1080" y="146" text-anchor="middle">owns in_transit / awaiting_visibility —</text>
+  <text class="colrole" x="1080" y="160" text-anchor="middle">a private Vec, not a queue, not the Scheduler</text>
+
+  <!-- Cache -->
+  <rect class="box" x="1380" y="86" width="260" height="86"/>
+  <text class="colname" x="1510" y="110" text-anchor="middle">Cache</text>
+  <text class="colfile" x="1510" y="129" text-anchor="middle">cache.rs · book.rs</text>
+  <text class="colrole" x="1510" y="146" text-anchor="middle">the book a strategy reads —</text>
+  <text class="colrole" x="1510" y="160" text-anchor="middle">queue_position lives here</text>
+
+  <!-- ============ LIFELINES ============ -->
+  <line class="life" x1="220" y1="172" x2="220" y2="1180"/>
+  <line class="life" x1="650" y1="172" x2="650" y2="1180"/>
+  <line class="life" x1="1080" y1="172" x2="1080" y2="1180"/>
+  <line class="life" x1="1510" y1="172" x2="1510" y2="1180"/>
+
+  <!-- ============ R1 -->
+  <text class="tick" x="40" y="234">+556,300</text>
+  <path class="arrow" marker-end="url(#ah)" d="M220 240 L 650 240 L 1080 240"/>
+  <circle class="dot" cx="650" cy="240" r="3"/>
+  <text class="lab" x="240" y="230">pop → dispatch: real message A applied to SimExchange's own book</text>
+  <text class="labm" x="1100" y="245">ask book: 24 lots @ Rs 265.00</text>
+
+  <!-- ============ R2 -->
+  <text class="tick" x="40" y="324">+556,445</text>
+  <path class="arrow" marker-end="url(#ah)" d="M220 330 L 650 330 L 1510 330"/>
+  <circle class="dot" cx="650" cy="330" r="3"/>
+  <text class="lab" x="240" y="320">pop → dispatch: same message, its Cache copy — recorder_ts, 145ns behind</text>
+  <text class="labm" x="1100" y="345">on_book fires → strategy decides to buy → calls ctx.submit(...)</text>
+
+  <!-- ============ R3 (submit -> in_transit) -->
+  <text class="tick" x="40" y="424">+556,445</text>
+  <path class="arrowb" marker-end="url(#ahb)" d="M1510 420 L 1080 420"/>
+  <text class="lab" x="1140" y="410" text-anchor="end">venue.submit(now=+556,445) — strategy's order reaches SimExchange</text>
+
+  <rect class="boxa" x="1200" y="440" width="330" height="70"/>
+  <text class="colrole" x="1215" y="458" fill="#f5a623">SimExchange's own private list:</text>
+  <text class="lab mono" x="1215" y="478">in_transit ← (+581,445, Submit)</text>
+  <text class="labm" x="1215" y="493">due = +556,445 + outbound_ns(25,000). Just a Vec push — nothing scheduled yet.</text>
+
+  <!-- ============ R4 (sync_venue_alarms pushes OrderArrival) -->
+  <text class="tick" x="40" y="559">+556,445</text>
+  <path class="arrowa" marker-end="url(#aha)" d="M1080 545 L 800 545"/>
+  <text class="labm" x="945" y="536" text-anchor="middle">next_arrival_due_ns()?</text>
+  <text class="labm" x="945" y="562" text-anchor="middle">→ +581,445</text>
+  <path class="arrowg" marker-end="url(#ahg)" d="M650 570 L 220 570"/>
+  <text class="lab" x="420" y="560" text-anchor="middle">sync_venue_alarms: new due-time → push a blank wake-up</text>
+  <rect class="boxa" x="60" y="580" width="320" height="34"/>
+  <text class="lab mono" x="220" y="602" text-anchor="middle">OrderArrival { op_id: 0 } @ +581,445</text>
+
+  <!-- ============ R5 meanwhile band -->
+  <rect x="60" y="638" width="1620" height="56" rx="8" fill="none" stroke="#30363d" stroke-width="1.2" stroke-dasharray="4 4"/>
+  <text class="labm" x="870" y="662" text-anchor="middle">meanwhile — inside that same 25,000ns window, two more real messages flow through Scheduler → SimExchange, same two rows as R1, on their own:</text>
+  <text class="labm" x="870" y="680" text-anchor="middle">B @+565,000 trades away 10 lots (24→14 @265.00) · C @+578,000 trades away the rest (14→0 — best ask now 265.10). Both land before +581,445.</text>
+
+  <!-- ============ R6 (OrderArrival fires) -->
+  <text class="tick" x="40" y="734">+581,445</text>
+  <path class="arrow" marker-end="url(#ah)" d="M220 730 L 650 730 L 1080 730"/>
+  <circle class="dot" cx="650" cy="730" r="3"/>
+  <text class="lab" x="240" y="720">pop → poll(+581,445): the blank ping is worthless alone — SimExchange checks its own list</text>
+  <rect class="boxa" x="1200" y="748" width="330" height="70"/>
+  <text class="colrole" x="1215" y="766" fill="#f5a623">in_transit ← empty now.</text>
+  <text class="lab mono" x="1215" y="786">awaiting_visibility ← (+606,445, Resting)</text>
+  <text class="labm" x="1215" y="804">doesn't cross (best ask now 265.10) — held inbound_ns(25,000) more.</text>
+
+  <!-- ============ R7 (sync_venue_alarms pushes ReportDelivery) -->
+  <text class="tick" x="40" y="849">+581,445</text>
+  <path class="arrowa" marker-end="url(#aha)" d="M1080 835 L 800 835"/>
+  <text class="labm" x="945" y="826" text-anchor="middle">next_visibility_due_ns()?</text>
+  <text class="labm" x="945" y="852" text-anchor="middle">→ +606,445</text>
+  <path class="arrowg" marker-end="url(#ahg)" d="M650 860 L 220 860"/>
+  <text class="lab" x="420" y="850" text-anchor="middle">sync_venue_alarms: new due-time again → another blank wake-up</text>
+  <rect class="boxa" x="60" y="870" width="320" height="34"/>
+  <text class="lab mono" x="220" y="892" text-anchor="middle">ReportDelivery { op_id: 0 } @ +606,445</text>
+
+  <!-- ============ R8 (ReportDelivery fires) -->
+  <text class="tick" x="40" y="946">+606,445</text>
+  <path class="arrow" marker-end="url(#ah)" d="M220 942 L 650 942 L 1080 942"/>
+  <circle class="dot" cx="650" cy="942" r="3"/>
+  <text class="lab" x="240" y="932">pop → poll(+606,445): this time something really is ready</text>
+  <rect class="boxa" x="1200" y="960" width="330" height="70"/>
+  <text class="colrole" x="1215" y="978" fill="#f5a623">awaiting_visibility ← empty now.</text>
+  <text class="lab" x="1215" y="998">returns ExecReport::Resting → order state = Accepted,</text>
+  <text class="lab" x="1215" y="1016">and (own-order injection) a fresh OrderAdd is queued</text>
+
+  <!-- ============ R9 (drain_cache_injections pushes real content) -->
+  <text class="tick" x="40" y="1051">+606,445</text>
+  <path class="arrowb" marker-end="url(#ahb)" d="M1080 1040 L 650 1040 L 220 1040"/>
+  <circle class="dot" cx="650" cy="1040" r="3"/>
+  <text class="lab" x="240" y="1030">drain_cache_injections: push real content this time — our own order, cache-bound</text>
+  <rect x="60" y="1058" width="320" height="34" rx="7" fill="#161b22" stroke="#4a9eff" stroke-width="1.3"/>
+  <text class="lab mono" x="220" y="1080" text-anchor="middle">MarketData → Cache @ +606,445</text>
+
+  <!-- ============ R10 (Scheduler pops it, Cache applies) -->
+  <text class="tick" x="40" y="1141">+606,445</text>
+  <path class="arrowb" marker-end="url(#ahb)" d="M220 1130 L 650 1130 L 1510 1130"/>
+  <circle class="dot" cx="650" cy="1130" r="3"/>
+  <text class="lab" x="240" y="1120">pop → dispatch: our own order lands in cache's book, same as any real order would</text>
+  <text class="labm" x="1300" y="1145">10 lots resting @265.00 — queue_position answers for it now</text>
+
+  <!-- ============ RULES PANEL ============ -->
+  <rect class="box" x="60" y="1210" width="1630" height="300"/>
+  <text class="colname" x="84" y="1240">Three things worth remembering</text>
+
+  <text class="rulehead" x="84" y="1276">1. Two queues, two jobs.</text>
+  <text class="rule" x="84" y="1298">The Scheduler decides <tspan class="mono">WHEN anything in the whole program runs</tspan> — every component's turn comes from it. SimExchange's own</text>
+  <text class="rule" x="84" y="1316"><tspan class="mono">in_transit</tspan> / <tspan class="mono">awaiting_visibility</tspan> just decide <tspan class="mono">WHAT SimExchange is privately waiting on</tspan> — a plain Vec, not queue machinery.</text>
+
+  <text class="rulehead" x="84" y="1354">2. SimExchange never pushes to the Scheduler. It only ever answers a question.</text>
+  <text class="rule" x="84" y="1376"><tspan class="mono">next_arrival_due_ns()</tspan> / <tspan class="mono">next_visibility_due_ns()</tspan> are pure reads — a <tspan class="mono">.min()</tspan> over its own private list, nothing more. Every single</text>
+  <text class="rule" x="84" y="1394">arrow that lands on the Scheduler in this diagram was pushed by <tspan fill="#3fb950" font-weight="700">main.rs</tspan>, in <tspan class="mono">sync_venue_alarms</tspan> or <tspan class="mono">drain_cache_injections</tspan> — never by the venue itself.</text>
+
+  <text class="rulehead" x="84" y="1432">3. An alarm and a message are not the same thing.</text>
+  <text class="rule" x="84" y="1454"><tspan fill="#f5a623" font-weight="700">OrderArrival</tspan> / <tspan fill="#f5a623" font-weight="700">ReportDelivery</tspan> carry no data at all — <tspan class="mono">op_id</tspan> is always <tspan class="mono">0</tspan>. They're blank pings: "something in the venue is</text>
+  <text class="rule" x="84" y="1472">due, go ask it." The real content — what actually happened — only ever appears in a <tspan fill="#4a9eff" font-weight="700">MarketData</tspan> event, real or, since Phase 2, one qtrade wrote itself.</text>
+
+</svg>

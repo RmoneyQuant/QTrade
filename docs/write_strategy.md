@@ -27,13 +27,86 @@ working strategy you can copy as a starting point.
 | 9  | [The order lifecycle — the states you will observe](#9-the-order-lifecycle--the-states-you-will-observe) |
 | 10 | [Logging from your strategy](#10-logging-from-your-strategy) |
 | 11 | [A complete worked example](#11-a-complete-worked-example) |
-| 12 | [Wiring your strategy into `main.rs`](#12-wiring-your-strategy-into-mainrs) |
+| 12 | [Running your strategy: the library entry point](#12-running-your-strategy-the-library-entry-point) |
 | 13 | [The config file — every key explained](#13-the-config-file--every-key-explained) |
 | 14 | [Terminal commands — running your strategy](#14-terminal-commands--running-your-strategy) |
 | 15 | [Reports — the four output files and every field in them](#15-reports--the-four-output-files-and-every-field-in-them) |
 | 16 | [Rules, limits, and gotchas](#16-rules-limits-and-gotchas) |
 | 17 | [What does *not* exist yet](#17-what-does-not-exist-yet) |
 | A  | [Appendix A — one-page cheat sheet](#appendix-a--one-page-cheat-sheet) |
+
+---
+
+## Quickstart — the five-minute version
+
+Skip this if you want the full explanation (§0 onward). This is the whole
+shape, nothing left out:
+
+```rust
+// src/my_strategy.rs, in your own crate (qtrade = { path = "..." } in
+// Cargo.toml -- see §2)
+use qtrade::{Ctx, Depth, InstrumentId, Lots, OrderType, Side, StartCtx, Strategy};
+
+pub struct MyStrategy {
+    instrument: Option<InstrumentId>,
+    traded: bool,
+}
+
+impl MyStrategy {
+    pub fn new() -> Self {
+        Self { instrument: None, traded: false }
+    }
+}
+
+impl Strategy for MyStrategy {
+    fn on_start(&mut self, ctx: &mut StartCtx) {
+        // 1. DEFINE + FILTER: name a real instrument by its real
+        //    attributes. Panics loudly, right here, if it isn't real in
+        //    today's refdata -- no silent None to forget to check.
+        let id = ctx.resolve("NATURALGAS"); // front-month future, the common case
+        // 2. SUBSCRIBE: only now does this instrument start sending you data.
+        ctx.subscribe(id, Depth::Bbo);
+        self.instrument = Some(id);
+    }
+
+    fn on_book(&mut self, ctx: &mut Ctx, instrument: InstrumentId, _seq: u64, _packet_ts: u64) {
+        if self.instrument != Some(instrument) || self.traded {
+            return;
+        }
+        let Some(book) = ctx.book(instrument) else { return };
+        let Some(bid) = book.best_bid() else { return };
+        // 3. TRADE.
+        if ctx.submit(instrument, Side::Buy, OrderType::LimitDay(bid.price), Lots(1)).is_ok() {
+            self.traded = true;
+        }
+    }
+}
+```
+
+```rust
+// src/main.rs
+mod my_strategy;
+use my_strategy::MyStrategy;
+use std::{path::Path, process::ExitCode};
+
+fn main() -> ExitCode {
+    let config = std::env::args().nth(1).expect("usage: my-strategy <config.toml>");
+    match qtrade::run_backtest(Path::new(&config), MyStrategy::new()) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => { eprintln!("{e}"); ExitCode::FAILURE }
+    }
+}
+```
+
+```bash
+cargo run --release -- configs/your_config.toml
+```
+
+That's a complete strategy: define/filter an instrument, subscribe, trade
+once, stop. Everything below explains each piece in depth, what else you can
+ask for (Options, specific strikes, several instruments of different kinds
+in one strategy — see §4), and what else is available (reading the book,
+P&L, cancel/modify, logging).
 
 ---
 
@@ -166,36 +239,57 @@ cargo test --release
 
 ## 2. Where your strategy lives
 
-Every strategy gets **its own subfolder** under `qtrade/src/strategy/`, holding
-exactly two files with the same name as the folder:
+**qtrade is a library (`qtrade = "0.1"` on crates.io).** Your strategy lives in
+**your own, separate Cargo crate** — you do not clone or edit the qtrade
+repository to write one.
 
 ```
-qtrade/src/strategy/<your_strategy_name>/
-├── <your_strategy_name>.rs    the code
-└── <your_strategy_name>.md    what it does, how it wires in, what it deliberately doesn't do
+your-strategy-crate/
+├── Cargo.toml              [dependencies] qtrade = "0.1"
+└── src/
+    └── main.rs              impl qtrade::Strategy for YourStruct, call qtrade::run_backtest
 ```
 
-The `.md` file is not optional in this project's convention. It should say, in
-plain language: what the strategy watches, what it does when it wakes up, and
-what it explicitly does *not* handle. Someone reading your `.md` should be able
-to decide whether your strategy is relevant to them without opening the `.rs`.
+A minimal `Cargo.toml`:
 
-Strategies already in the tree, useful as references:
+```toml
+[package]
+name = "my-strategy"
+version = "0.1.0"
+edition = "2021"
 
-| Folder | What it is |
+[dependencies]
+qtrade = "0.1"
+```
+
+There is no `.md` companion file required outside the qtrade repo itself — that
+convention (one code file + one doc file per strategy folder) is this
+project's own internal contributor discipline for strategies that ship *inside*
+`qtrade/src/strategy/` as reference examples. Worth doing for your own crate
+too if others will read your code, but qtrade does not enforce it.
+
+Strategies shipped inside the qtrade repo itself, useful as references (read
+their source, do not edit it in place — copy the pattern into your own crate):
+
+| Folder (inside the qtrade repo) | What it is |
 |---|---|
 | `limit_order_book_generator/` | Pure observer. Subscribes, prints the book, **submits no orders.** Simplest possible starting point. |
 | `naturalgas_bracket/` | First order-placing strategy: a time-triggered bracket trade on NATURALGAS. |
 | `multi_instrument_bracket/` | Trades two instruments at once with real resting limit orders, `modify()` and `cancel()`. |
-| `order_lifecycle_demo/` | A scripted walk through *every* order state qtrade can produce. Best reference for "what does this callback actually receive". |
+| `order_lifecycle_demo/` | A scripted walk through *every* order state qtrade can produce — the strategy compiled into the shipped `qtrade` demo binary today. Best reference for "what does this callback actually receive". |
 
-> **Only one strategy is compiled in at a time.** There is no runtime strategy
-> loader and no multi-strategy config. Switching strategies is a source edit to
-> `main.rs` — see [§12](#12-wiring-your-strategy-into-mainrs).
+> **One `qtrade::Strategy` type per `run_backtest` call** — `run_backtest` is
+> generic over `impl Strategy`, constructed and passed in by you, so there is
+> no runtime loader and no config key that selects one. But nothing stops your
+> own crate from having several `[[bin]]` targets (or `examples/`), each
+> constructing a different strategy — "one at a time" means per-run, not
+> per-crate. See [§12](#12-running-your-strategy-the-library-entry-point).
 
-Shared infrastructure — the `Strategy` trait, `Ctx`, `StartCtx` — lives in
-`qtrade/src/strategy/strategy.rs`, directly in the parent folder. Do not put
-your strategy there.
+Shared infrastructure — the `Strategy` trait, `Ctx`, `StartCtx`, and every type
+`Ctx`'s own methods hand you — is exposed directly from the crate root:
+`qtrade::Strategy`, `qtrade::Ctx`, `qtrade::Side`, and so on. See `qtrade/src/
+lib.rs`'s own header comment in the qtrade repo for the complete list of
+what's public and why it's that list and not "everything."
 
 ---
 
@@ -383,40 +477,138 @@ Two things to know:
 
 ## 4. `StartCtx` — resolving and subscribing to instruments
 
-`StartCtx` is handed only to `on_start`. It has exactly two methods.
+`StartCtx` is handed only to `on_start`. This is the **only** place you
+declare which instruments you want — `run_backtest` no longer takes a list of
+names from you; whatever you `subscribe()` to here *is* the tracked
+instrument set for the whole run, decided by your own code, not a parameter
+the caller has to keep in sync with what your strategy actually wants.
 
 ```rust
 impl StartCtx<'_> {
-    pub fn resolve(&self, name: &str) -> Option<InstrumentId>;
+    pub fn instruments(&self) -> InstrumentQuery<'_>;
+    pub fn resolve(&self, name: &str) -> InstrumentId;
     pub fn subscribe(&mut self, instrument: InstrumentId, depth: Depth);
 }
 ```
 
-### 4.1 `resolve(name)` — turn a name into an instrument id
+### 4.1 The rule: a request either names a real instrument, or the run stops
+
+This applies to everything in this section. There is no "quietly returns
+nothing" path anywhere in instrument resolution:
+
+> **A strategy's declared intent either resolves to a real instrument in
+> today's reference data, or the run panics, loudly, right there, naming
+> exactly what was asked for.** Never a silent `None`/empty result a caller
+> could forget to check.
+
+If you've used an older version of this doc: `resolve` used to return
+`Option<InstrumentId>`. It doesn't any more — see §4.2.
+
+### 4.2 `resolve(name)` — the common case: front-month future by name
 
 ```rust
-let Some(id) = ctx.resolve("NATURALGAS") else { return };
+let id = ctx.resolve("NATURALGAS");   // InstrumentId, not Option — panics if not real today
+ctx.subscribe(id, Depth::Bbo);
 ```
 
 `name` is an **underlying/commodity name**, not a contract symbol and not a
 token number. `resolve` returns the `InstrumentId` for **this trading day's
 front-month future** on that underlying, looked up out of that day's real MCX
-contract master file (`MCXScrips.bcp`).
+contract master file (`MCXScrips.bcp`). Point qtrade at a different day's
+capture file and `resolve("NATURALGAS")` automatically finds *that* day's
+front-month NATURALGAS future — a different token number, resolved for you.
+Your strategy code does not change.
 
-This matters a lot: you never hardcode a token. Point qtrade at a different
-day's capture file and `resolve("NATURALGAS")` automatically finds *that*
-day's front-month NATURALGAS future — a different token number, resolved for
-you. Your strategy code does not change.
+**Panics if `name` isn't a real, tradable Future today** — a typo, an
+underlying that doesn't trade that day, or a name that only exists as an
+Option/Index instrument (`resolve` only ever looks for a Future — see §4.3
+for anything else). This is deliberate (§4.1), not a rough edge: an
+instrument your strategy depends on either exists or the run stops before
+wasting time on a backtest that was quietly missing something.
 
-Returns `None` if the name does not resolve to a real front-month future in
-that day's reference data. Always handle it.
+`resolve` is shorthand for exactly this `ctx.instruments()` call:
 
-**Which names are valid?** Only names your strategy declared in its
-`UNDERLYINGS` constant (see §12.3). `main.rs` reads that constant, resolves
-each name against the day's contract file, and builds the lookup table that
-`resolve` reads. A name not in `UNDERLYINGS` will always return `None`.
+```rust
+ctx.instruments().underlying(name).kind_is_future().front_n_expiries(1).one()
+```
 
-### 4.2 `subscribe(instrument, depth)` — start receiving that instrument's data
+### 4.3 `ctx.instruments()` — anything else: Options, a specific expiry, several kinds in one strategy
+
+A bare name is only ever enough to specify *one* Future (underlying + "the
+nearest expiry" is a complete description). It can't express an Option at
+all — an Option also needs a strike and a right (call/put), and there's no
+way to fit those into a `&str`. For anything beyond the common case, query
+the real catalog directly:
+
+```rust
+pub struct InstrumentQuery<'a> { /* ... */ }
+
+impl<'a> InstrumentQuery<'a> {
+    pub fn venue(self, venue: Venue) -> Self;
+    pub fn underlying(self, name: &str) -> Self;
+    pub fn kind_is_future(self) -> Self;
+    pub fn kind_is_option(self) -> Self;
+    pub fn right(self, right: Right) -> Self;              // Right::Call | Right::Put
+    pub fn strike(self, strike: Price) -> Self;             // exact match, wire-raw scale
+    pub fn expiry(self, expiry: Date) -> Self;               // exact match
+    pub fn front_n_expiries(self, n: usize) -> Self;         // nearest n, sorted
+    pub fn collect(self) -> Vec<InstrumentId>;                // however many matched, zero included
+    pub fn one(self) -> InstrumentId;                          // exactly one, or panic (§4.1)
+}
+```
+
+Two different terminal calls, two different jobs:
+
+- **`.one()`** — "I am naming one specific real instrument." Panics if zero
+  matched (nothing today has these attributes) or more than one matched (the
+  query was ambiguous — usually a missing `.right()` or `.strike()` on an
+  Option query). Use this whenever you know exactly what you want.
+- **`.collect()`** — open-ended enumeration. Returns whatever matched, zero
+  included — use this when "how many, if any" is itself useful information
+  (scanning a whole option chain, checking what's live today), not when
+  you're naming a specific contract.
+
+A worked example — a Future *and* a specific Option, in one strategy:
+
+```rust
+fn on_start(&mut self, ctx: &mut StartCtx) {
+    let future = ctx.resolve("NATURALGAS");
+    ctx.subscribe(future, Depth::Bbo);
+
+    let call = ctx.instruments()
+        .underlying("NATURALGAS")
+        .kind_is_option()
+        .right(Right::Call)
+        .strike(Price(250 * 100_000_000))   // Rs 250.00, wire-raw scale (§7.1)
+        .front_n_expiries(1)
+        .one();
+    ctx.subscribe(call, Depth::Bbo);
+}
+```
+
+**Looping over several strikes instead of writing each one by hand** —
+`.one()` per iteration means a strike that isn't real today panics right
+there, naming exactly which one, instead of silently subscribing to fewer
+strikes than you asked for:
+
+```rust
+for strike_rupees in [200.0, 250.0, 300.0] {
+    let strike = Price((strike_rupees * 100_000_000.0) as i64);
+    let id = ctx.instruments().underlying("NATURALGAS").kind_is_option()
+        .right(Right::Call).strike(strike).front_n_expiries(1).one();
+    ctx.subscribe(id, Depth::Bbo);
+}
+```
+
+**What kinds are real today?** `FUTCOM`/`FUTIDX` (commodity and index
+futures) and `OPTFUT`/`OPTIDX` (commodity and index options) all load —
+`Right`, `Exercise` (`Call`/`Put`, `European`/`American`), `PricingModel`
+(MCX's real "Options Pricing Model" column — `Black76` on every real option
+checked so far), and `Settlement` (`Cash`/`Physical`, derived from the real
+per-instrument Delivery Mode column, not assumed) are all real attributes on
+`InstrumentKind::Option`/`Future` — see §5.3.
+
+### 4.4 `subscribe(instrument, depth)` — start receiving that instrument's data
 
 ```rust
 ctx.subscribe(id, Depth::Bbo);
@@ -452,30 +644,30 @@ You may subscribe to several instruments, and you will be woken for each of
 them. **Always check the `instrument` parameter** at the top of `on_book` /
 `on_trade` — you will otherwise act on the wrong contract.
 
-### 4.3 A complete `on_start`
+### 4.5 A complete `on_start`, several underlyings
 
 ```rust
 const UNDERLYINGS: &[&str] = &["NATURALGAS", "CRUDEOIL"];
 
 fn on_start(&mut self, ctx: &mut StartCtx) {
     for name in UNDERLYINGS {
-        match ctx.resolve(name) {
-            Some(id) => {
-                ctx.subscribe(id, Depth::Bbo);
-                self.instruments.push((*name, id));
-                tracing::info!("{}", logging::line(
-                    "MyStrategy", None, "SUBSCRIBE",
-                    &format!("{name} -> token {}", id.0)));
-            }
-            None => {
-                tracing::info!("{}", logging::line(
-                    "MyStrategy", None, "SUBSCRIBE",
-                    &format!("{name} -- NOT resolved in this day's refdata")));
-            }
-        }
+        // Panics loudly if `name` isn't a real front-month future today
+        // (§4.1) -- no else-branch needed, there is nothing to check.
+        let id = ctx.resolve(name);
+        ctx.subscribe(id, Depth::Bbo);
+        self.instruments.push((*name, id));
+        tracing::info!("{}", logging::line(
+            "MyStrategy", None, "SUBSCRIBE",
+            &format!("{name} -> token {}", id.0)));
     }
 }
 ```
+
+`UNDERLYINGS` here is just a `const` on your own strategy module — a
+convenient way to keep a strategy and its own instrument list in one place,
+the same convention every strategy in this tree follows. It's not read by
+`run_backtest` or anything else automatically; your `on_start` is what turns
+it into real subscriptions, exactly as shown above.
 
 ---
 
@@ -556,7 +748,7 @@ pub struct Instrument {
     pub id: InstrumentId,
     pub venue: Venue,
     pub native_id: i64,             // the exchange's own token number
-    pub kind: InstrumentKind,       // Future / Option / ...
+    pub kind: InstrumentKind,       // Future { .. } / Option { .. } -- see below
     pub tick_size: Price,           // minimum price increment, wire units
     pub lot_size: i64,              // units of the commodity per lot
     pub multiplier: i64,
@@ -565,6 +757,25 @@ pub struct Instrument {
     pub currency: ...,
 }
 ```
+
+`kind` is where an instrument's *type-specific* attributes live — an enum,
+not one flat struct with optional fields, so it's impossible to accidentally
+build (say) a Future with a strike price:
+
+```rust
+pub enum InstrumentKind {
+    Future { underlying: String, expiry: Date, contract_month: YearMonth, settlement: Settlement },
+    Option { underlying: String, expiry: Date, strike: Price, right: Right, exercise: Exercise, settlement: Settlement, pricing_model: PricingModel },
+    Equity { series: String },   // not real today -- no BCP row models this
+    Spread { leg1: InstrumentId, leg2: InstrumentId },   // not real today -- no BCP row models this
+}
+```
+
+You don't construct these yourself — you only ever read them back via
+`ctx.refdata().get(id).kind` for an instrument you already resolved through
+§4. `settlement` (`Cash`/`Physical`) and, for Options, `pricing_model`
+(`BlackScholes`/`Black76`/`Bachelier`) are both real, derived from MCX's own
+reference columns, not assumed defaults.
 
 The two fields you will actually use constantly:
 
@@ -866,10 +1077,10 @@ let rupees = bid.price.0 as f64 / RUPEE_RAW;         // 26_330_000_000 -> 263.30
 let px = Price((263.30 * RUPEE_RAW) as i64);
 
 // raw qty -> lots
-let lots = level.qty.0 / crate::types::RAW_QTY_PER_LOT;   // 420_000 -> 42
+let lots = level.qty.0 / qtrade::RAW_QTY_PER_LOT;   // 420_000 -> 42
 
 // lots -> raw qty, for modify()
-let q = Qty(3 * crate::types::RAW_QTY_PER_LOT);           // 3 lots -> Qty(30_000)
+let q = Qty(3 * qtrade::RAW_QTY_PER_LOT);           // 3 lots -> Qty(30_000)
 ```
 
 ### 7.3 Prices must sit on the tick grid
@@ -1107,7 +1318,7 @@ single most useful debugging tool you have.
 Use `logging::line(component, now_ns, tag, message)`:
 
 ```rust
-use crate::logging;
+use qtrade::logging;
 
 tracing::info!("{}", logging::line(
     "MyStrategy",           // component name - use your struct's name
@@ -1162,7 +1373,9 @@ This is a full, self-contained strategy. It:
 6. Places the exit on the next book update, five ticks above the entry.
 7. Logs everything.
 
-Save it as `qtrade/src/strategy/passive_follower/passive_follower.rs`.
+Save it as `src/passive_follower.rs` in your own crate (the one with `qtrade`
+in its `[dependencies]` — see §2), and declare `mod passive_follower;` in your
+`main.rs`.
 
 ```rust
 //! passive_follower -- a minimal but complete example strategy.
@@ -1170,16 +1383,12 @@ Save it as `qtrade/src/strategy/passive_follower/passive_follower.rs`.
 //! Places one passive bid, follows the market with modify(), and exits
 //! five ticks above the entry once filled.
 
-use crate::book::Book;
-use crate::event_dispatcher::Depth;
-use crate::execution::{FillRecord, OrderEventRecord};
-use crate::logging;
-use crate::simulator::OrderType;
-use crate::strategy::{Ctx, StartCtx, Strategy};
-use crate::types::{BookState, InstrumentId, Lots, Price, Qty, Side, RAW_QTY_PER_LOT};
+use qtrade::logging;
+use qtrade::{Book, BookState, Ctx, Depth, FillRecord, InstrumentId, Lots, OrderEventRecord, OrderType, Price, Qty, Side, StartCtx, Strategy, RAW_QTY_PER_LOT};
 
-/// `main.rs` reads this to decide which instruments to resolve and load
-/// reference data for. Every name you intend to `ctx.resolve()` must be here.
+/// Passed straight through to `qtrade::run_backtest` (see §12) to decide
+/// which instruments to resolve and load reference data for. Every name
+/// you intend to `ctx.resolve()` must be here.
 pub const UNDERLYINGS: &[&str] = &["NATURALGAS"];
 
 const RUPEE_RAW: f64 = 100_000_000.0;
@@ -1246,20 +1455,14 @@ impl Strategy for PassiveFollower {
     // ---------------------------------------------------------------
     fn on_start(&mut self, ctx: &mut StartCtx) {
         for name in UNDERLYINGS {
-            match ctx.resolve(name) {
-                Some(id) => {
-                    ctx.subscribe(id, Depth::Bbo);
-                    self.instrument = Some(id);
-                    tracing::info!("{}", logging::line(
-                        "PassiveFollower", None, "SUBSCRIBE",
-                        &format!("{name} -- front-month token id={}, depth=Bbo", id.0)));
-                }
-                None => {
-                    tracing::info!("{}", logging::line(
-                        "PassiveFollower", None, "SUBSCRIBE",
-                        &format!("{name} -- NOT resolved in this day's refdata")));
-                }
-            }
+            // Panics loudly if `name` isn't real today (§4.1) -- nothing
+            // to check, nothing to silently skip.
+            let id = ctx.resolve(name);
+            ctx.subscribe(id, Depth::Bbo);
+            self.instrument = Some(id);
+            tracing::info!("{}", logging::line(
+                "PassiveFollower", None, "SUBSCRIBE",
+                &format!("{name} -- front-month token id={}, depth=Bbo", id.0)));
         }
         tracing::info!("{}", logging::line(
             "PassiveFollower", None, "START", "armed -- first action at 10:05 IST"));
@@ -1415,7 +1618,8 @@ impl Strategy for PassiveFollower {
 }
 ```
 
-And its companion `qtrade/src/strategy/passive_follower/passive_follower.md`:
+Optional but good practice — a short companion doc, `src/passive_follower.md`
+in your own crate, in the style this project uses internally:
 
 ```markdown
 # passive_follower
@@ -1438,124 +1642,102 @@ Waiting -> Quoting -> ArmExit -> Exiting -> Finished.
 
 ---
 
-## 12. Wiring your strategy into `main.rs`
+## 12. Running your strategy: the library entry point
 
-qtrade compiles **one** strategy at a time. There is no runtime strategy
-loader and no config key that selects a strategy — which one is active is a
-source-code edit in `qtrade/src/main.rs`.
-
-There are **four** places to change, plus one optional fifth. Search `main.rs`
-for the name of the strategy currently wired in (`order_lifecycle_demo` at the
-time of writing) and you will find them all.
-
-### 12.1 The module declaration (near the top, ~line 68)
+qtrade is a library now (`qtrade = "0.1"`). There is no `main.rs` inside the
+qtrade repo to edit — the whole engine (config loading, mode selection,
+building `Cache`/`ExecutionEngine`/`SimExchange`, the dual-clock replay loop,
+writing `orders.log`/`fills.log`/`report.txt`) lives behind one function:
 
 ```rust
-#[path = "strategy/order_lifecycle_demo/order_lifecycle_demo.rs"]
-mod order_lifecycle_demo;
+pub fn run_backtest<S: qtrade::Strategy + 'static>(
+    config_path: &std::path::Path,
+    strategy: S,
+) -> Result<std::rc::Rc<std::cell::RefCell<S>>, String>
 ```
 
-becomes
+You call it from **your own crate's** `main.rs` (see §2). For `PassiveFollower`
+from §11:
 
 ```rust
-#[path = "strategy/passive_follower/passive_follower.rs"]
 mod passive_follower;
-```
 
-The `#[path]` attribute is what lets the file live in a subfolder without a
-`mod.rs`.
+use std::env;
+use std::path::Path;
+use std::process::ExitCode;
 
-### 12.2 The `use` line (~line 84)
-
-```rust
-use order_lifecycle_demo::OrderLifecycleDemo;
-```
-
-becomes
-
-```rust
 use passive_follower::PassiveFollower;
-```
 
-### 12.3 The `UNDERLYINGS` references (~lines 327 and 330)
+fn main() -> ExitCode {
+    let args: Vec<String> = env::args().collect();
+    let Some(config_path) = args.get(1) else {
+        eprintln!("usage: {} <config-file>", args.first().map(String::as_str).unwrap_or("my-strategy"));
+        return ExitCode::FAILURE;
+    };
 
-This is the one people miss.
-
-```rust
-let resolved: Vec<(&str, Option<InstrumentId>)> = order_lifecycle_demo::UNDERLYINGS
-    .iter()
-    .map(|name| (*name, feed_replay::resolve_front_month(&master, name)))
-    .collect();
-...
-eprintln!("none of {:?} resolved to a real front-month future in this day's refdata",
-          order_lifecycle_demo::UNDERLYINGS);
-```
-
-Both `order_lifecycle_demo::UNDERLYINGS` become `passive_follower::UNDERLYINGS`.
-
-**This is why your strategy must export `pub const UNDERLYINGS: &[&str]`.**
-`main.rs` reads it *before* your strategy is even constructed, in order to:
-
-1. resolve each name to that day's front-month token,
-2. build the instrument filter so the decoder only decodes those tokens
-   (this is a large performance win — a full day's feed carries thousands of
-   instruments you do not care about),
-3. load the `Instrument` records the execution engine needs for tick-size and
-   max-order-qty validation,
-4. build the `name -> id` table that backs your `ctx.resolve()`.
-
-If a name is not in `UNDERLYINGS`, `ctx.resolve()` will return `None` for it,
-no matter what you subscribe to.
-
-### 12.4 The construction site (~line 476)
-
-```rust
-let strategy = OrderLifecycleDemo::new();
-```
-
-becomes
-
-```rust
-let strategy = PassiveFollower::new();
-```
-
-Everything after this line is generic — `main.rs` wraps it in
-`Rc<RefCell<_>>` and registers the same instance with both dispatchers
-(`EventDispatcher` calls `on_book`/`on_trade`; `ControlDispatcher` calls
-`on_fill`/`on_order_update`).
-
-### 12.5 Optional: the end-of-run summary hook (~line 616)
-
-`main.rs`'s final stdout summary calls a method that is **not** part of the
-`Strategy` trait:
-
-```rust
-println!("round trips: {}", strategy.borrow().round_trips().len());
-for (i, (name, entry_raw, exit_raw, reason)) in strategy.borrow().round_trips().iter().enumerate() {
-    ...
+    match qtrade::run_backtest(Path::new(config_path), PassiveFollower::new()) {
+        Ok(_strategy) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 ```
 
-`round_trips()` is `order_lifecycle_demo`'s own instrumentation, not something
-every strategy has. If your strategy does not implement it, **delete or comment
-out this block**, or the code will not compile.
+That's the whole integration. Three things worth knowing about this call:
 
-If you want your own end-of-run summary, the portable way is to write it from
-`on_stop()` into `events.log` (see §11), which needs no `main.rs` change at all.
+### 12.1 There's no instrument list in this call — your `on_start` *is* the list
 
-### 12.6 Checklist
+Older versions of this doc had `run_backtest` take a third argument,
+`underlyings: &[&str]`, resolved *before* your strategy was even
+constructed. That's gone. Instrument selection now happens entirely inside
+your own `on_start` (§4) — `run_backtest` loads the day's full reference
+data, runs `on_start` against it, and reads back whatever your strategy
+actually called `ctx.subscribe()` on to learn the real tracked-instrument
+set (the instrument filter, the `Instrument` records the execution engine
+needs, all of it, built from that). If `on_start` subscribes to nothing at
+all, `run_backtest` returns `Err("on_start subscribed to zero instruments --
+nothing to replay")`.
+
+This is what makes mixing Futures and Options (or several of either) in one
+strategy possible — the old `&[&str]` parameter could only ever have named
+Futures by underlying, with no way to add a strike or a right to the
+request. See §4.3.
+
+### 12.2 What you get back — and why there's no generic "end-of-run summary"
+
+`run_backtest` returns `Rc<RefCell<S>>` — your own strategy instance, handed
+back once the run is over — specifically so you can read whatever
+*strategy-specific* state or instrumentation you want afterward. `run_backtest`
+itself only ever calls `Strategy`'s own trait methods on it; it has no idea
+`order_lifecycle_demo`'s own `round_trips()` (or any other concrete strategy's
+own extra methods) exist, so it can't print a summary for you. If you want an
+end-of-run summary, either:
+
+- read it from the returned handle, in your own `main()`, after `run_backtest`
+  returns (the pattern the shipped `qtrade` demo binary itself uses — see
+  `qtrade/src/main.rs` in the qtrade repo), or
+- write it from your strategy's own `on_stop()` into `events.log` (see §11) —
+  needs nothing from the caller at all.
+
+### 12.3 Multiple strategies, multiple binaries
+
+There's no runtime strategy loader and `run_backtest` is generic over exactly
+one `impl Strategy` per call — but nothing stops your own crate from having
+several `[[bin]]` targets (or files under `examples/`), each constructing a
+different strategy and calling `run_backtest` on its own. "One strategy per
+run" is a fact about the function signature, not a limit on your crate.
+
+### 12.4 Checklist
 
 ```
-[ ] created qtrade/src/strategy/<name>/<name>.rs
-[ ] created qtrade/src/strategy/<name>/<name>.md
-[ ] exported `pub const UNDERLYINGS: &[&str]`
-[ ] exported `pub fn new() -> Self`
-[ ] implemented `Strategy for <Struct>` with at least `on_start`
-[ ] main.rs: #[path] mod declaration
-[ ] main.rs: use line
-[ ] main.rs: both UNDERLYINGS references
-[ ] main.rs: construction site
-[ ] main.rs: removed/replaced the round_trips() summary block
+[ ] your own crate, `qtrade` in [dependencies]
+[ ] your strategy struct + `impl qtrade::Strategy` with at least `on_start`
+[ ] on_start resolves/queries + subscribes every instrument you need (§4)
+[ ] exported `pub fn new() -> Self` (or any constructor you like)
+[ ] your own `main.rs`: parse the config-path argument, call
+    `qtrade::run_backtest(path, YourStrategy::new())`
 [ ] cargo build --release
 ```
 
@@ -1687,20 +1869,24 @@ log_level = "debug"
 
 ## 14. Terminal commands — running your strategy
 
+These commands run from **your own crate's** root (see §2) — the one with
+`qtrade` in `[dependencies]`, not the qtrade repo itself.
+
 ### 14.1 Build
 
 ```bash
-cd /home/vaibhav/QTrade/qtrade
+cd my-strategy
 cargo build --release
 ```
 
 ### 14.2 Run
 
 ```bash
-./target/release/qtrade configs/passive_follower_21_08_2026.toml
+./target/release/my-strategy configs/passive_follower_21_08_2026.toml
 ```
 
-The single argument is the path to your config file.
+The single argument is the path to your config file (whatever your own
+`main.rs` does with `args.get(1)` — see §12).
 
 Or, in one step:
 
@@ -1709,6 +1895,12 @@ cargo run --release -- configs/passive_follower_21_08_2026.toml
 ```
 
 (The `--` separates cargo's own arguments from your program's.)
+
+> **Just want to run the shipped demo, no strategy of your own yet?** Inside
+> the qtrade repo itself: `cd qtrade && cargo build --release &&
+> ./target/release/qtrade <config-file>` — runs `order_lifecycle_demo`, the
+> one strategy compiled into that binary. Good for confirming your setup
+> works before writing anything.
 
 ### 14.3 What you will see on stdout
 
@@ -1761,18 +1953,18 @@ grep -n 1787286944257 events.log
 
 ### 14.5 Running the test suite
 
-If you changed anything outside your own strategy folder:
-
-```bash
-cargo test --release
-```
+Your own crate only compiles against qtrade's public API surface — you have no
+occasion to run qtrade's own internal test suite (`cargo test --release`
+inside the qtrade repo) unless you're contributing to qtrade itself, not just
+writing a strategy against it.
 
 ### 14.6 Typical iteration loop
 
+From your own crate's root:
+
 ```bash
-cd /home/vaibhav/QTrade/qtrade
 cargo build --release \
-  && ./target/release/qtrade configs/passive_follower_21_08_2026.toml \
+  && ./target/release/my-strategy configs/passive_follower_21_08_2026.toml \
   && cat "logs/qtrade/$(ls -t logs/qtrade | head -1)/report.txt"
 ```
 
@@ -1794,6 +1986,13 @@ logs/qtrade/20260903_143122/
 
 The folder name is the run's start time in IST (`YYYYMMDD_HHMMSS`). Runs never
 overwrite each other, so you can compare two runs side by side.
+
+All four files open with the same run banner and close with the same
+`>> Successfully completed backtest` line — a quick visual confirmation a
+run reached the end normally rather than being cut off mid-write.
+`report.txt` also prints the backtest's real wall-clock ("system") time —
+how long the run itself took, not simulated market time — right above that
+closing line.
 
 > If your strategy never submits an order, `orders.log`, `fills.log` and the
 > body of `report.txt` are legitimately empty. That is not a bug — the pure
@@ -2015,8 +2214,8 @@ the next book update. See §6.4.
 ### 16.2 `submit` takes `Lots`, `modify` takes `Qty`
 
 ```rust
-ctx.submit(inst, side, order_type, Lots(3))?;                    // 3 lots
-ctx.modify(id, Qty(3 * crate::types::RAW_QTY_PER_LOT), None)?;   // also 3 lots
+ctx.submit(inst, side, order_type, Lots(3))?;               // 3 lots
+ctx.modify(id, Qty(3 * qtrade::RAW_QTY_PER_LOT), None)?;    // also 3 lots
 ```
 
 `Qty(3)` is **not** three lots. It is 3/10000ths of a lot. See §7.
@@ -2110,10 +2309,14 @@ returns `Err` only for the `can_submit` violation in §16.1.
 
 Costs on MCX are large and charged on notional. Read `net_pnl`. See §15.4.
 
-### 16.17 Your strategy must export `UNDERLYINGS` and `new()`
+### 16.17 `run_backtest` takes your already-constructed strategy, nothing else
 
-`main.rs` needs both. `UNDERLYINGS` is read before your struct exists. See
-§12.3.
+`qtrade::run_backtest(config_path, strategy: S)` — that's the whole call.
+Instrument selection is not a parameter any more; it happens inside your own
+`on_start` (§4). The `UNDERLYINGS` constant + `new()` pattern you'll see in
+every strategy in this tree is just a convention for keeping a strategy and
+its own instrument list together, not something `run_backtest` reads. See
+§12.1.
 
 ---
 
@@ -2140,10 +2343,12 @@ The architecture is deliberately built so the *same compiled strategy* will
 run live when those two edges exist — you would not rewrite your strategy —
 but that day has not arrived.
 
-### 17.3 One strategy at a time
+### 17.3 One strategy per `run_backtest` call
 
-No runtime strategy loader, no multi-strategy config. Switching strategies is
-the source edit in §12.
+No runtime strategy loader, no multi-strategy config — `run_backtest` is
+generic over exactly one `impl Strategy` per call. Nothing stops your own
+crate from having several binaries/examples, each running a different
+strategy. See §12.3.
 
 ### 17.4 No firm-level view from a strategy
 
@@ -2187,14 +2392,10 @@ every API call takes the `client_order_id`.
 ### The imports you will need
 
 ```rust
-use crate::book::Book;
-use crate::decoder::Trade;
-use crate::event_dispatcher::Depth;
-use crate::execution::{FillRecord, OrderEventRecord};
-use crate::logging;
-use crate::simulator::OrderType;
-use crate::strategy::{Ctx, StartCtx, Strategy};
-use crate::types::{BookState, InstrumentId, Lots, Price, Qty, Side, RAW_QTY_PER_LOT};
+use qtrade::logging;
+use qtrade::{Book, BookState, Ctx, Depth, FillRecord, InstrumentId, Lots, OrderEventRecord, OrderType, Price, Qty, Side, StartCtx, Strategy, Trade, RAW_QTY_PER_LOT};
+// only if you're querying beyond a plain resolve() -- see §4.3
+use qtrade::{Date, Exercise, PricingModel, Right, Settlement, Venue};
 ```
 
 ### The trait
@@ -2212,7 +2413,9 @@ use crate::types::{BookState, InstrumentId, Lots, Price, Qty, Side, RAW_QTY_PER_
 ### `StartCtx`
 
 ```rust
-ctx.resolve("NATURALGAS")                  // -> Option<InstrumentId>  (this day's front month)
+ctx.resolve("NATURALGAS")                  // -> InstrumentId (this day's front month) -- PANICS if not real (§4.1)
+ctx.instruments()                          // -> InstrumentQuery -- .underlying/.kind_is_option/.right/.strike/.expiry/.front_n_expiries
+                                            //    .collect() -> Vec<InstrumentId> (zero ok)  |  .one() -> InstrumentId (PANICS unless exactly 1)
 ctx.subscribe(id, Depth::Bbo)              // or Depth::Top(5)
 ```
 
@@ -2274,21 +2477,27 @@ let tick = ctx.refdata().get(instrument).map(|i| i.tick_size.0).unwrap_or(0);
 if tick <= 0 { return; }
 ```
 
-### Wiring into `main.rs`
+### Running it (your own crate, `qtrade` in `[dependencies]`)
 
 ```rust
-#[path = "strategy/<name>/<name>.rs"]  mod <name>;     // ~line 68
-use <name>::<Struct>;                                  // ~line 84
-<name>::UNDERLYINGS                                    // ~lines 327, 330 (twice)
-let strategy = <Struct>::new();                        // ~line 476
-// and remove main.rs's round_trips() summary block    // ~line 616
+mod <name>;
+use <name>::<Struct>;
+
+fn main() -> std::process::ExitCode {
+    let args: Vec<String> = std::env::args().collect();
+    let Some(config_path) = args.get(1) else { return std::process::ExitCode::FAILURE };
+    match qtrade::run_backtest(std::path::Path::new(config_path), <Struct>::new()) {
+        Ok(_) => std::process::ExitCode::SUCCESS,
+        Err(e) => { eprintln!("{e}"); std::process::ExitCode::FAILURE }
+    }
+}
 ```
 
 ### Run
 
 ```bash
-cd qtrade && cargo build --release
-./target/release/qtrade configs/<your_config>.toml
+cargo build --release
+./target/release/<your-binary-name> configs/<your_config>.toml
 cat "logs/qtrade/$(ls -t logs/qtrade | head -1)/report.txt"
 ```
 
@@ -2306,15 +2515,28 @@ logs/qtrade/<YYYYMMDD_HHMMSS>/
 
 ## Where to go next
 
+The items below live **inside the qtrade repo itself** — clone it to read
+them; you do not need it cloned to build against `qtrade` as a dependency
+(§2), only to browse its own source and internal docs.
+
 - **`qtrade/src/strategy/order_lifecycle_demo/`** — a scripted walk through
-  every order state. The best reference for "what does this callback actually
-  receive".
+  every order state, and the strategy compiled into the shipped `qtrade` demo
+  binary. The best reference for "what does this callback actually receive".
+- **`qtrade/src/strategy/instrument_selection_demo/`** — the §4/Quickstart
+  pattern as a real, runnable strategy: define + filter + subscribe a Future
+  and a specific Option, place a couple of real trades, stop.
+- **`qtrade/src/strategy/mixed_instruments_demo/`** — a pure existence proof
+  (subscribes only, never trades) that `ctx.instruments()` really does
+  resolve every real kind — commodity and index, Future and Option — in one
+  strategy; prints each one's real `settlement`/`pricing_model` back out.
 - **`qtrade/src/strategy/multi_instrument_bracket/`** — a real two-instrument
   strategy with resting orders, `modify()` and `cancel()`.
 - **`qtrade/src/strategy/limit_order_book_generator/`** — the simplest possible
   strategy: subscribes and observes, submits nothing.
 - **`qtrade/src/strategy/strategy.rs`** — the trait, `Ctx` and `StartCtx`
   themselves, with extensive comments explaining *why* each decision was made.
+- **`qtrade/src/lib.rs`** — the library crate itself: `run_backtest`, and the
+  header comment explaining exactly what's public and why.
 - **`qtrade/src/strategy/README.md`** — the folder convention and its history.
 - **`qtrade/src/execution/execution_user_doc.md`** — the order lifecycle in
   depth.

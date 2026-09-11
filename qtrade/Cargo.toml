@@ -3,6 +3,14 @@ name = "qtrade"
 version = "0.1.0"
 edition = "2021"
 
+# The strategy-facing library (2026-09-04) -- see src/lib.rs's own
+# header. Everything `main.rs` used to do inline now lives here, behind
+# `run_backtest`, so an external crate can `impl Strategy` and depend on
+# `qtrade` instead of forking this source tree.
+[lib]
+name = "qtrade"
+path = "src/lib.rs"
+
 # The one real entry point (2026-08-25: merged with the former
 # `backtester` bin -- see main.rs's own header and main_user_doc.md for
 # why. `main.rs` was frozen early as a decode-only CLI purely as a
@@ -81,6 +89,44 @@ path = "src/feed_replay/validate.rs"
 [[bin]]
 name = "cme-decoder"
 path = "src/cme_decoder/cme_decoder.rs"
+
+# Coverage-audit tool for the EOBI-only 100%-coverage effort (2026-09-07):
+# streams one or more real capture files and tallies decoded message
+# counts by type, specifically to prove zero `Unknown` messages remain
+# after adding decoders for 13201/13300/13301/13302/13604. Not part of
+# any normal run path -- ad hoc, run by hand against real data. Same
+# reason as the other harnesses above for being a separate [[bin]]
+# instead of a #[test] (streams multi-gigabyte real files, prints a
+# report, isn't a pass/fail assertion).
+[[bin]]
+name = "decoder-tally"
+path = "src/decoder/tally.rs"
+
+# Tick-flow benchmark strategy (2026-09-08): not a trading strategy --
+# a simple, understood, repeating submit/cancel pattern (every 10 ticks,
+# submit; cancel if unfilled after 5) run against a real full day, purely
+# to get an honest reference wall-clock time for "how long should a
+# backtest like this take" -- see tick_flow_bench.rs's own header.
+[[bin]]
+name = "tick-flow-bench"
+path = "src/strategy/tick_flow_bench/main.rs"
+
+# Existence proof for the 2026-09-09 instrument-selection work (Future +
+# Option in one strategy via `ctx.instruments()`) -- see
+# mixed_instruments_demo.rs's own header. Not a real strategy; ad hoc,
+# same reason as decoder-tally/tick-flow-bench for being a throwaway
+# [[bin]] rather than folded into a normal example.
+[[bin]]
+name = "mixed-instruments-demo"
+path = "src/strategy/mixed_instruments_demo/main.rs"
+
+# The reference example for the 2026-09-09/11 instrument-selection work:
+# define instruments by real attributes, filter against today's refdata
+# (panicking loudly on a miss), subscribe, place a couple of real trades,
+# stop. See instrument_selection_demo.rs's own header.
+[[bin]]
+name = "instrument-selection-demo"
+path = "src/strategy/instrument_selection_demo/main.rs"
 
 [dependencies]
 tracing = "0.1.44"
