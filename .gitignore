@@ -36,3 +36,14 @@ references/cme_feeder_27_08_2026.bin
 
 # generated .bcp inspection reports (references/inspect_bcp.py)
 references/bcp_report_*.txt
+
+# Market data captures and their decoded parquet -- multi-GB, never in git.
+# Feeder output (cme_feeder_<date>.bin), raw recorder captures
+# (cme_feeder_capture_*.bin) and everything built from them.
+*.bin
+*.parquet
+
+# Generated from the captures above by cme-decoder / the parquet builder.
+# Reproducible, large, and noisy in diffs.
+references/cme_decoded_*_readable.txt
+references/cme_timestamp_gaps*.csv
