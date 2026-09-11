@@ -111,6 +111,23 @@ path = "src/decoder/tally.rs"
 name = "tick-flow-bench"
 path = "src/strategy/tick_flow_bench/main.rs"
 
+# Existence proof for the 2026-09-09 instrument-selection work (Future +
+# Option in one strategy via `ctx.instruments()`) -- see
+# mixed_instruments_demo.rs's own header. Not a real strategy; ad hoc,
+# same reason as decoder-tally/tick-flow-bench for being a throwaway
+# [[bin]] rather than folded into a normal example.
+[[bin]]
+name = "mixed-instruments-demo"
+path = "src/strategy/mixed_instruments_demo/main.rs"
+
+# The reference example for the 2026-09-09/11 instrument-selection work:
+# define instruments by real attributes, filter against today's refdata
+# (panicking loudly on a miss), subscribe, place a couple of real trades,
+# stop. See instrument_selection_demo.rs's own header.
+[[bin]]
+name = "instrument-selection-demo"
+path = "src/strategy/instrument_selection_demo/main.rs"
+
 [dependencies]
 tracing = "0.1.44"
 tracing-appender = "0.2.5"

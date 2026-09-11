@@ -82,10 +82,13 @@ pub use book::Book;
 pub use decoder::Trade;
 pub use event_dispatcher::Depth;
 pub use execution::{CancelReason, Cost, DenyReason, FillRecord, Order, OrderEventRecord, OrderState, StrategyId};
-pub use refdata::InstrumentMaster;
+pub use refdata::{InstrumentMaster, InstrumentQuery};
 pub use simulator::{FillKind, OrderType, RejectReason};
 pub use strategy::{Ctx, CtxError, Pnl, StartCtx, Strategy};
-pub use types::{BookState, Currency, Date, Instrument, InstrumentId, InstrumentKind, Lots, OrderHandle, Price, PriceLevel, Qty, RAW_QTY_PER_LOT, Settlement, Side, Venue, YearMonth};
+pub use types::{
+    BookState, Currency, Date, Exercise, Instrument, InstrumentId, InstrumentKind, Lots, OrderHandle, Price, PriceLevel, PricingModel, Qty, RAW_QTY_PER_LOT, Right, Settlement,
+    Side, Venue, YearMonth,
+};
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -93,6 +96,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
 use std::rc::Rc;
+use std::time::Instant;
 
 use cache::{Cache, InstrumentFilter};
 use control_dispatcher::ControlDispatcher;
@@ -139,6 +143,22 @@ fn fmt_level(lvl: Option<types::PriceLevel>) -> String {
     match lvl {
         Some(l) => format!("Rs {:.2} x {:.1}", l.price.0 as f64 / RUPEE_RAW, l.qty.0 as f64 / LOT_RAW),
         None => "--".to_string(),
+    }
+}
+
+/// Human-readable one-liner for a startup banner -- replaces the
+/// caller-supplied string name a pre-2026-09-09 run would have printed
+/// (`"resolved NATURALGAS: ..."`) now that instrument identity comes
+/// from `on_start`'s own `subscribe` calls, not a name the caller handed
+/// in. Not used for anything but printing -- never parsed back.
+fn describe_instrument(i: &types::Instrument) -> String {
+    match &i.kind {
+        types::InstrumentKind::Future { underlying, .. } => format!("{underlying} FUT"),
+        types::InstrumentKind::Option { underlying, strike, right, .. } => {
+            format!("{underlying} {right:?} @ Rs {:.2}", strike.0 as f64 / RUPEE_RAW)
+        }
+        types::InstrumentKind::Equity { series } => format!("{series} EQ"),
+        types::InstrumentKind::Spread { .. } => "SPREAD".to_string(),
     }
 }
 
@@ -245,7 +265,13 @@ fn drain_cache_injections(engine: &mut ExecutionEngine, sched: &mut Scheduler) {
 /// it -- same hard-exit behavior the CLI binary always had, just also
 /// inherited by anything that calls this function as a library now.
 /// Worth a real fix later, not part of this move.
-pub fn run_backtest<S: Strategy + 'static>(config_path: &Path, underlyings: &[&str], strategy: S) -> Result<Rc<RefCell<S>>, String> {
+pub fn run_backtest<S: Strategy + 'static>(config_path: &Path, strategy: S) -> Result<Rc<RefCell<S>>, String> {
+    // Wall-clock ("system") time, not simulated market time -- covers the
+    // whole call (config/refdata load, `on_start`, the full replay, every
+    // log/report write), not just `feed_replay`'s own internal timing
+    // (`ReplayStats::elapsed`, which only spans the streaming loop
+    // itself). Printed to stdout and into `report.txt` at the end.
+    let wall_clock_start = Instant::now();
     let cfg = config::load(config_path).map_err(|e| e.to_string())?;
 
     if cfg.run.mode != "backtest" {
@@ -257,23 +283,54 @@ pub fn run_backtest<S: Strategy + 'static>(config_path: &Path, underlyings: &[&s
     let max_outer_records = cfg.run.max_outer_records;
 
     let master = feed_replay::load_refdata(primary_path).map_err(|e| e.to_string())?;
+    println!("refdata: {} instruments loaded", master.all().len());
 
-    let resolved: Vec<(&str, Option<InstrumentId>)> = underlyings.iter().map(|name| (*name, feed_replay::resolve_front_month(&master, name))).collect();
-    let tracked_ids: Vec<InstrumentId> = resolved.iter().filter_map(|(_, id)| *id).collect();
-    if tracked_ids.is_empty() {
-        return Err(format!("none of {underlyings:?} resolved to a real front-month future in this day's refdata"));
+    let run_dir = format!("{}/{}", cfg.run.report_dir, run_timestamp_ist());
+    fs::create_dir_all(&run_dir).map_err(|e| format!("failed to create {run_dir}: {e}"))?;
+    println!("run output folder: {run_dir}\n");
+
+    let events_log_path = format!("{run_dir}/events.log");
+    let log_level = logging::LogLevel::parse(&cfg.run.log_level);
+    let _log_guards = logging::init(log_level, Path::new(&events_log_path)).map_err(|e| format!("failed to create {events_log_path}: {e}"))?;
+
+    let strategy = Rc::new(RefCell::new(strategy));
+
+    // 2026-09-09 restructuring: `on_start` now runs *before* `Cache`/
+    // `ExecutionEngine`/`SimExchange` exist, against `master` directly
+    // (via `StartCtx::instruments()`), instead of against a caller-
+    // supplied `underlyings: &[&str]` list resolved before the strategy
+    // ever ran. The real tracked-instrument set is read back afterward
+    // from whatever the strategy actually called `ctx.subscribe()` on
+    // (`EventDispatcher::subscribed_instruments`) -- the strategy's own
+    // declaration is now the single source of truth, not a parallel list
+    // the caller had to keep in sync with what the strategy actually
+    // wanted. This is what makes mixing FUTCOM and Option subscriptions
+    // in one strategy possible: a bare `&str` name can pick one Future
+    // (underlying + front-month is a complete specification) but can't
+    // carry a strike/right, so it could never have expressed an Option
+    // request no matter how this function's plumbing was arranged.
+    let mut event_dispatcher = EventDispatcher::new();
+    let mut control_dispatcher = ControlDispatcher::new();
+    let my_id = event_dispatcher.register(strategy.clone() as Rc<RefCell<dyn Strategy>>);
+    control_dispatcher.register(strategy.clone() as Rc<RefCell<dyn Strategy>>);
+    {
+        let mut start_ctx = strategy::StartCtx::new(&master, &mut event_dispatcher, &mut control_dispatcher, my_id);
+        strategy.borrow_mut().on_start(&mut start_ctx);
     }
-    let names_by_id: HashMap<InstrumentId, &str> = resolved.iter().filter_map(|(name, id)| id.map(|i| (i, *name))).collect();
-    let label_of = |id: InstrumentId| -> &str { names_by_id.get(&id).copied().unwrap_or("UNKNOWN") };
-    let name_to_id: HashMap<&str, InstrumentId> = resolved.iter().filter_map(|(name, id)| id.map(|i| (*name, i))).collect();
+
+    let tracked_ids: Vec<InstrumentId> = event_dispatcher.subscribed_instruments();
+    if tracked_ids.is_empty() {
+        return Err("on_start subscribed to zero instruments -- nothing to replay".to_string());
+    }
 
     let filter = InstrumentFilter::from_native_ids(tracked_ids.iter().map(|id| id.0 as i64));
-
     let trade_instruments: Vec<types::Instrument> = master.all().iter().filter(|i| tracked_ids.contains(&i.id)).cloned().collect();
+    let labels: HashMap<InstrumentId, String> = trade_instruments.iter().map(|i| (i.id, describe_instrument(i))).collect();
+    let label_of = |id: InstrumentId| -> &str { labels.get(&id).map(String::as_str).unwrap_or("UNKNOWN") };
 
-    println!("refdata: {} instruments loaded, filter admits {} native ids, {} of them resolved for order entry", master.all().len(), filter.len(), trade_instruments.len());
+    println!("subscribed {} instrument(s), filter admits {} native ids, {} resolved for order entry", tracked_ids.len(), filter.len(), trade_instruments.len());
     for id in &tracked_ids {
-        println!("  resolved {}: native id {}", label_of(*id), id.0);
+        println!("  {}: native id {}", label_of(*id), id.0);
     }
 
     let mut cache = Cache::new(master, filter);
@@ -313,26 +370,6 @@ pub fn run_backtest<S: Strategy + 'static>(config_path: &Path, underlyings: &[&s
     let venue_otr = simulator::OtrConfig { window: std::time::Duration::from_secs(1), max_messages_per_window: 10_000, max_otr_ratio: 1_000_000.0 };
     let mut sim_venue = SimExchange::new(&tracked_ids, venue_otr).with_order_latency(cfg.run.order_outbound_latency_ns, cfg.run.order_inbound_latency_ns);
     let mut engine = ExecutionEngine::new(run_config, trade_instruments, Box::new(execution::AlwaysAllowRms), CostConfig::default(), vec![1_000_000, 5_000_000], true);
-
-    let run_dir = format!("{}/{}", cfg.run.report_dir, run_timestamp_ist());
-    fs::create_dir_all(&run_dir).map_err(|e| format!("failed to create {run_dir}: {e}"))?;
-    println!("run output folder: {run_dir}\n");
-
-    let events_log_path = format!("{run_dir}/events.log");
-    let log_level = logging::LogLevel::parse(&cfg.run.log_level);
-    let _log_guards = logging::init(log_level, Path::new(&events_log_path)).map_err(|e| format!("failed to create {events_log_path}: {e}"))?;
-
-    let strategy = Rc::new(RefCell::new(strategy));
-
-    let mut event_dispatcher = EventDispatcher::new();
-    let mut control_dispatcher = ControlDispatcher::new();
-    let my_id = event_dispatcher.register(strategy.clone() as Rc<RefCell<dyn Strategy>>);
-    control_dispatcher.register(strategy.clone() as Rc<RefCell<dyn Strategy>>);
-    {
-        let resolver = |name: &str| name_to_id.get(name).copied();
-        let mut start_ctx = strategy::StartCtx::new(&resolver, &mut event_dispatcher, &mut control_dispatcher, my_id);
-        strategy.borrow_mut().on_start(&mut start_ctx);
-    }
 
     let limit_desc = if max_outer_records == 0 { "no limit -- full file, start to end".to_string() } else { format!("capped at {max_outer_records} outer records") };
     if capture_paths.len() == 1 {
@@ -397,13 +434,16 @@ pub fn run_backtest<S: Strategy + 'static>(config_path: &Path, underlyings: &[&s
 
     let orders_path = format!("{run_dir}/orders.log");
     let mut orders_file = File::create(&orders_path).expect("create orders.log");
+    write!(orders_file, "{}", logging::BANNER).unwrap();
     writeln!(orders_file, "# order report -- every order-state transition this run produced").unwrap();
     for ev in engine.order_events() {
         writeln!(orders_file, "t={:>10} client_order_id={:<20} state={:<14} {}", ev.timestamp_ns, ev.client_order_id, format!("{:?}", ev.resulting_state), ev.description).unwrap();
     }
+    write!(orders_file, "{}", logging::SUCCESS_FOOTER).unwrap();
 
     let fills_path = format!("{run_dir}/fills.log");
     let mut fills_file = File::create(&fills_path).expect("create fills.log");
+    write!(fills_file, "{}", logging::BANNER).unwrap();
     writeln!(fills_file, "# fills / trade report -- every real fill this run produced").unwrap();
     for f in engine.fills() {
         writeln!(
@@ -421,10 +461,23 @@ pub fn run_backtest<S: Strategy + 'static>(config_path: &Path, underlyings: &[&s
         )
         .unwrap();
     }
+    write!(fills_file, "{}", logging::SUCCESS_FOOTER).unwrap();
 
+    let wall_clock = wall_clock_start.elapsed();
     let report_path = format!("{run_dir}/report.txt");
     let tier1 = engine.tier1_report(&sim_venue);
-    fs::write(&report_path, format!("{tier1}")).expect("write report.txt");
+    fs::write(
+        &report_path,
+        format!("{}{tier1}\n--- backtest wall-clock time (system time, not sim time) ---\n{:.2}s ({}m {:.1}s)\n{}", logging::BANNER, wall_clock.as_secs_f64(), wall_clock.as_secs() / 60, wall_clock.as_secs_f64() % 60.0, logging::SUCCESS_FOOTER),
+    )
+    .expect("write report.txt");
+
+    // events.log's own footer -- everything else in that file goes
+    // through `tracing` (see logging.rs's own header for why), so this
+    // is the one raw string handed to it too, rather than a direct file
+    // write (the file handle itself is owned by the non-blocking
+    // appender by this point, not reachable here).
+    tracing::info!("{}", logging::SUCCESS_FOOTER);
 
     println!("\n--- report (Tier 1) ---\n{tier1}");
     println!("logs written:");
@@ -432,6 +485,7 @@ pub fn run_backtest<S: Strategy + 'static>(config_path: &Path, underlyings: &[&s
     println!("  {orders_path}  ({} order events)", engine.order_events().len());
     println!("  {fills_path}  ({} fills)", engine.fills().len());
     println!("  {report_path}");
+    println!("backtest wall-clock time: {:.2}s ({}m {:.1}s)", wall_clock.as_secs_f64(), wall_clock.as_secs() / 60, wall_clock.as_secs_f64() % 60.0);
 
     Ok(strategy)
 }

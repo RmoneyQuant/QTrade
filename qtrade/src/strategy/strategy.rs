@@ -114,7 +114,7 @@ use crate::control_dispatcher::ControlDispatcher;
 use crate::decoder::Trade;
 use crate::event_dispatcher::{Depth, EventDispatcher, SubscriberId};
 use crate::execution::{Cost, ExecOutcome, ExecutionEngine, FillRecord, GateOutcome, NewOrderIntent, Order, OrderEventRecord, StrategyId};
-use crate::refdata::InstrumentMaster;
+use crate::refdata::{InstrumentMaster, InstrumentQuery};
 use crate::simulator::{OrderType, SimExchange};
 use crate::types::{BookState, InstrumentId, Lots, Price, Qty, Side, Venue};
 
@@ -331,8 +331,18 @@ impl<'a> Ctx<'a> {
 /// Handed only to `on_start` -- "the only place you can declare
 /// instruments, dependencies and time series. Market data has not
 /// started" (`STRATEGY-GUIDE.md` §3).
+///
+/// **2026-09-09 restructuring**: used to carry a `resolver` closure
+/// pre-computed by `lib.rs::run_backtest` from a caller-supplied
+/// `underlyings: &[&str]` list (Future-only, front-month-only -- see
+/// `resolve`'s own doc comment for why that was a dead end for Options).
+/// Carries the real `InstrumentMaster` directly now, so a strategy can
+/// query the *whole* day's catalog itself, at any kind, any expiry, any
+/// strike -- `run_backtest` no longer decides the tracked-instrument set
+/// before the strategy runs; it reads back whatever `subscribe` calls
+/// happened here instead (see `EventDispatcher::subscribed_instruments`).
 pub struct StartCtx<'a> {
-    resolver: &'a dyn Fn(&str) -> Option<InstrumentId>,
+    master: &'a InstrumentMaster,
     event_dispatcher: &'a mut EventDispatcher,
     control_dispatcher: &'a mut ControlDispatcher,
     my_id: SubscriberId,
@@ -342,18 +352,36 @@ impl<'a> StartCtx<'a> {
     /// `pub(crate)`, same reasoning as `Ctx::new` -- `EventDispatcher`/
     /// `ControlDispatcher` are crate-internal, only `lib.rs`'s
     /// `run_backtest` ever constructs one.
-    pub(crate) fn new(resolver: &'a dyn Fn(&str) -> Option<InstrumentId>, event_dispatcher: &'a mut EventDispatcher, control_dispatcher: &'a mut ControlDispatcher, my_id: SubscriberId) -> Self {
-        StartCtx { resolver, event_dispatcher, control_dispatcher, my_id }
+    pub(crate) fn new(master: &'a InstrumentMaster, event_dispatcher: &'a mut EventDispatcher, control_dispatcher: &'a mut ControlDispatcher, my_id: SubscriberId) -> Self {
+        StartCtx { master, event_dispatcher, control_dispatcher, my_id }
     }
 
-    /// Same call, same signature, in both Backtest Mode and Live Mode
-    /// (`STRATEGY-GUIDE.md`'s own opening guarantee) -- only what's
-    /// *behind* it differs: `main.rs` supplies a closure over whatever
-    /// this mode's real instrument lookup is (backtest: results already
-    /// resolved via `feed_replay::resolve_front_month`; live: a
-    /// different mechanism, not built yet).
-    pub fn resolve(&self, name: &str) -> Option<InstrumentId> {
-        (self.resolver)(name)
+    /// The real query builder over this day's full loaded catalog --
+    /// every `FUTCOM`/`OPTFUT` row that passed `refdata`'s acceptance
+    /// filter, not just whatever a caller happened to pre-resolve. See
+    /// `InstrumentQuery`'s own doc comment for the call shape (this is
+    /// the `ctx.instruments()` it documents -- now real, not aspirational).
+    pub fn instruments(&self) -> InstrumentQuery<'a> {
+        self.master.instruments()
+    }
+
+    /// Convenience wrapping the common case: "the nearest-expiry Future
+    /// for this underlying" -- equivalent to
+    /// `ctx.instruments().venue(Venue::Mcx).underlying(name)
+    /// .kind_is_future().front_n_expiries(1).one()`. Kept for the
+    /// strategies already written against it (and because it's still the
+    /// single most common request); reach for `ctx.instruments()`
+    /// directly for anything else -- a specific expiry, an Option, a
+    /// non-front-month Future.
+    ///
+    /// **Panics if `name` doesn't resolve** (2026-09-09: was
+    /// `Option<InstrumentId>`, letting a typo or a name that doesn't
+    /// trade that day pass through as a silent `None` a caller could
+    /// forget to check). qtrade's rule, stated directly: a strategy's
+    /// declared intent either resolves to a real instrument or the run
+    /// stops loudly -- see `InstrumentQuery::one`'s own doc comment.
+    pub fn resolve(&self, name: &str) -> InstrumentId {
+        self.instruments().venue(Venue::Mcx).underlying(name).kind_is_future().front_n_expiries(1).one()
     }
 
     /// D33: `Strategy -> subscribe() -> Control Dispatcher -> Data

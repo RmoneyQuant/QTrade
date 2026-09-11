@@ -23,7 +23,7 @@
 //! is required every trading day regardless of which convention is used.
 
 use crate::types::{
-    ContractFilePaise, Currency, Date, Instrument, InstrumentId, InstrumentKind, Settlement, Venue, YearMonth,
+    ContractFilePaise, Currency, Date, Exercise, Instrument, InstrumentId, InstrumentKind, Price, PricingModel, Right, Settlement, Venue, YearMonth,
 };
 use std::collections::HashMap;
 use std::fmt;
@@ -37,8 +37,9 @@ const IST_OFFSET_SECONDS: i64 = 19_800; // 5 hours 30 minutes
 const SECONDS_PER_DAY: i64 = 86_400;
 
 /// The minimum number of comma-separated columns a row needs for every
-/// index this module reads (highest used is `parts[108]`).
-const MIN_COLUMNS: usize = 109;
+/// index this module reads (highest used is `parts[117]`, Delivery Mode
+/// -- 2026-09-09, real full-parity pass).
+const MIN_COLUMNS: usize = 118;
 
 #[derive(Debug)]
 pub enum RefDataError {
@@ -64,10 +65,19 @@ impl From<std::io::Error> for RefDataError {
 /// Parses `MCXScrips.bcp` at `path` into `Instrument` records.
 ///
 /// Only rows that pass the exact acceptance filter from `Contract.cpp`'s
-/// `EXCHG_MCX` branch **and** carry `InstrumentType == "FUTCOM"` become an
-/// `Instrument` -- D37 implements `Future` only this round, so an
-/// accepted row of any other instrument type (option, index future, spot
-/// commodity, ...) is silently skipped rather than mis-modelled.
+/// `EXCHG_MCX` branch **and** carry `InstrumentType` of `FUTCOM`,
+/// `OPTFUT`, `OPTIDX`, or `FUTIDX` become an `Instrument` --
+/// (2026-09-09, full-parity pass) **every real MCX `InstrumentType` that
+/// is actually tradable** now loads, at MCX's own real attributes, no
+/// more and no less. `COM` is the one deliberate, documented exclusion:
+/// it is not a tradable instrument at all -- the BCP spec's own field
+/// description names it an underlying/index *reference* row (one per
+/// commodity/index, carrying no order-book-relevant attributes of its
+/// own), and it never appears on the EOBI feed this engine replays. An
+/// accepted row of any type outside those five is silently skipped
+/// rather than mis-modelled -- none were found in real data as of this
+/// pass (verified: exactly `{FUTCOM, OPTFUT, OPTIDX, FUTIDX, COM}` across
+/// a full real file).
 ///
 /// A malformed line (too few columns, non-numeric token) is skipped, not
 /// treated as an error -- the file is allowed to contain rows this
@@ -111,11 +121,15 @@ pub fn load_mcx_instruments(path: &Path) -> Result<Vec<Instrument>, RefDataError
             continue;
         }
 
-        // InstrumentType -- parts[53], substring to first space. Only
-        // "FUTCOM" is handled this round (D37); everything else accepted
-        // by the filter above is real but out of scope for now.
+        // InstrumentType -- parts[53], substring to first space. All four
+        // real tradable types load now (2026-09-09): FUTCOM/FUTIDX ->
+        // Future, OPTFUT/OPTIDX -> Option. COM (the one remaining real
+        // value) is the deliberate exclusion -- see this function's own
+        // doc comment.
         let inst_type = parts[53].split(' ').next().unwrap_or("");
-        if inst_type != "FUTCOM" {
+        let is_future = inst_type == "FUTCOM" || inst_type == "FUTIDX";
+        let is_option = inst_type == "OPTFUT" || inst_type == "OPTIDX";
+        if !is_future && !is_option {
             continue;
         }
 
@@ -192,16 +206,70 @@ pub fn load_mcx_instruments(path: &Path) -> Result<Vec<Instrument>, RefDataError
         // than fabricating a band from the wrong unit.
         let price_band = None;
 
-        let kind = InstrumentKind::Future {
-            underlying: symbol,
-            expiry,
-            contract_month,
-            // No settlement-type column in the T01 scope or in
-            // Contract.cpp's MCX branch. MCX Crude Oil / Crude Oil Mini
-            // and Natural Gas / Natural Gas Mini futures are all cash
-            // settled in practice, so `Cash` is used as the default for
-            // every FUTCOM row loaded here. Documented, not derived.
-            settlement: Settlement::Cash,
+        // Delivery Mode -- parts[117] (real column, spec: "0 - Both
+        // Delivery Mode, 1 - Sellers Option, 2 - Compulsory Delivery,
+        // -1 - Not Applicable ie. Delivery is NOT allowed"). Derived, not
+        // hardcoded: earlier this loader defaulted every row to `Cash`,
+        // documented as "MCX Crude Oil... Natural Gas... cash settled in
+        // practice" -- true for *those* commodities, but wrong as a
+        // blanket default. Real 21_08_2026 data settles it: every
+        // FUTCOM row for CRUDEOIL/CRUDEOILM/NATURALGAS/NATGASMINI/
+        // COTTONOIL/ELECDMBL reads `-1` (matches the old comment
+        // exactly), but GOLD/SILVER/COPPER/ALUMINIUM/ZINC/LEAD/NICKEL/
+        // CARDAMOM/COTTON/STEELREBAR/MENTHAOIL all read `2` (Compulsory
+        // Delivery) -- genuinely physically-settled commodities, which
+        // the old blanket `Cash` got wrong for all of them. `-1` (never
+        // allowed to deliver) maps to `Cash`; `0`/`1`/`2` (some real
+        // delivery obligation exists) map to `Physical`. Options and
+        // FUTIDX/OPTIDX always read `-1` in real data (index-linked, or
+        // an option's own settlement isn't a delivery-mode question) --
+        // `Cash` for both, also matches reality.
+        let delivery_mode: i64 = parts[117].trim().parse().unwrap_or(-1);
+        let settlement = if delivery_mode == -1 { Settlement::Cash } else { Settlement::Physical };
+
+        let kind = if is_option {
+            // Strike -- parts[55], same paise-denominated convention as
+            // TickSize (parts[21]) -- confirmed empirically: real
+            // NATURALGAS OPTFUT rows carry a strike ladder from Rs 55
+            // upward (`17500`/100 = Rs 175.00, etc.), correctly bracketing
+            // NATURALGAS's real spot price (~Rs 260-270 that day); a real
+            // GOLD OPTFUT row reads `18150000`/100 = Rs 181,500.00,
+            // equally plausible for GOLD. Both cross-checked against real
+            // rows, same discipline as `tick_size`'s own verification.
+            let strike_paise: i64 = parts[55].trim().parse().unwrap_or(0);
+            let strike: Price = ContractFilePaise(strike_paise).to_wire_price();
+
+            // Option type -- parts[56], MCX's own two-letter code (spec:
+            // *Trading Binary Interface... ETI...* §4, "Option Type"):
+            // CA=Call American, PA=Put American, CE=Call European,
+            // PE=Put European. Encodes both `right` and `exercise` in one
+            // column. An unrecognized code defaults to Call/European
+            // rather than skipping the row -- same "never fabricate, but
+            // never panic on a real row either" posture as the rest of
+            // this loader; genuinely never observed in real captures so
+            // far.
+            let (right, exercise) = match parts[56].trim() {
+                "CA" => (Right::Call, Exercise::American),
+                "PA" => (Right::Put, Exercise::American),
+                "CE" => (Right::Call, Exercise::European),
+                "PE" => (Right::Put, Exercise::European),
+                _ => (Right::Call, Exercise::European),
+            };
+
+            // Options Pricing Model -- parts[116] (spec: "0-Black Scholes
+            // 3-Black76 4-Bachelier... For Instrument Type other than
+            // Options, Value will be -1"). Every real OPTFUT/OPTIDX row
+            // checked reads `3` (Black76).
+            let pricing_model = match parts[116].trim().parse::<i64>().unwrap_or(-1) {
+                0 => PricingModel::BlackScholes,
+                3 => PricingModel::Black76,
+                4 => PricingModel::Bachelier,
+                other => PricingModel::Other(other),
+            };
+
+            InstrumentKind::Option { underlying: symbol, expiry, strike, right, exercise, settlement, pricing_model }
+        } else {
+            InstrumentKind::Future { underlying: symbol, expiry, contract_month, settlement }
         };
 
         let instrument = Instrument {
@@ -316,6 +384,7 @@ impl InstrumentMaster {
     pub fn instruments(&self) -> InstrumentQuery<'_> {
         InstrumentQuery {
             items: self.instruments.iter().collect(),
+            trail: Vec::new(),
         }
     }
 }
@@ -336,24 +405,86 @@ impl InstrumentMaster {
 /// `.venue()`, `.underlying()` and `.kind_is_future()` does not matter,
 /// but `.front_n_expiries()` should be called last since it also imposes
 /// the final ordering.
+///
+/// **Two different terminal calls, two different contracts (2026-09-09):**
+/// `.collect()` returns whatever matched, zero included -- genuinely
+/// open-ended enumeration (an option chain, "how many contracts exist
+/// today"). `.one()` means "I am naming one specific real instrument" --
+/// it panics, unconditionally, if that's not exactly what the day's
+/// refdata contains. qtrade's rule (2026-09-09, stated directly): a
+/// strategy's declared intent either resolves to a real instrument or
+/// the run stops loudly -- it never silently proceeds short an
+/// instrument nobody noticed was missing. Building a strike ladder by
+/// looping over a list of strikes and calling `.one()` per iteration
+/// gets this for free, one instrument at a time -- there's no separate
+/// "batch" primitive because each iteration already refuses to be silent
+/// on its own.
 pub struct InstrumentQuery<'a> {
     items: Vec<&'a Instrument>,
+    /// What was asked for, in call order -- carried purely so `.one()`'s
+    /// panic message says something a person can act on instead of just
+    /// "0 matched." Every filter method appends one entry.
+    trail: Vec<String>,
 }
 
 impl<'a> InstrumentQuery<'a> {
     pub fn venue(mut self, venue: Venue) -> Self {
         self.items.retain(|i| i.venue == venue);
+        self.trail.push(format!("venue={venue:?}"));
         self
     }
 
     pub fn underlying(mut self, name: &str) -> Self {
         self.items.retain(|i| underlying_of(i) == Some(name));
+        self.trail.push(format!("underlying={name:?}"));
         self
     }
 
     pub fn kind_is_future(mut self) -> Self {
         self.items
             .retain(|i| matches!(i.kind, InstrumentKind::Future { .. }));
+        self.trail.push("kind=Future".to_string());
+        self
+    }
+
+    /// Mirrors `.kind_is_future()`, for `InstrumentKind::Option`.
+    pub fn kind_is_option(mut self) -> Self {
+        self.items
+            .retain(|i| matches!(i.kind, InstrumentKind::Option { .. }));
+        self.trail.push("kind=Option".to_string());
+        self
+    }
+
+    /// Keeps only options of this `right` (Call/Put). A no-op filter on a
+    /// non-`Option` item -- combine with `.kind_is_option()` for a query
+    /// that means what it says.
+    pub fn right(mut self, right: Right) -> Self {
+        self.items.retain(|i| matches!(i.kind, InstrumentKind::Option { right: r, .. } if r == right));
+        self.trail.push(format!("right={right:?}"));
+        self
+    }
+
+    /// Keeps only options struck at exactly this price (qtrade's internal
+    /// wire-raw `Price` scale, same as every other `Price` in this
+    /// codebase -- not rupees, not BCP paise). Exact match, not "nearest"
+    /// -- a strategy that wants the closest available strike to some
+    /// reference price collects the full chain via `.kind_is_option()`
+    /// and picks one itself; guessing "nearest" here would hide a wrong
+    /// assumption about which reference price matters.
+    pub fn strike(mut self, strike: Price) -> Self {
+        self.items.retain(|i| matches!(i.kind, InstrumentKind::Option { strike: s, .. } if s == strike));
+        self.trail.push(format!("strike={strike:?}"));
+        self
+    }
+
+    /// Keeps only instruments expiring on exactly this date -- the exact-
+    /// match counterpart to `.front_n_expiries()`'s "nearest N" sort-and-
+    /// truncate. Use this when you know which contract month you want
+    /// (e.g. a specific quarter's option), `.front_n_expiries()` when you
+    /// just want "whichever is nearest."
+    pub fn expiry(mut self, expiry: Date) -> Self {
+        self.items.retain(|i| expiry_of(i) == expiry);
+        self.trail.push(format!("expiry={expiry:?}"));
         self
     }
 
@@ -364,16 +495,42 @@ impl<'a> InstrumentQuery<'a> {
     pub fn front_n_expiries(mut self, n: usize) -> Self {
         self.items.sort_by_key(|i| expiry_of(i));
         self.items.truncate(n);
+        self.trail.push(format!("front_n_expiries({n})"));
         self
     }
 
-    /// Terminal call. Returns `InstrumentId`s, not full records -- a
+    /// Terminal call for open-ended enumeration -- returns however many
+    /// matched, zero included. `InstrumentId`s, not full records -- a
     /// strategy subscribes/depends-on by id (see STRATEGY-GUIDE.md §4)
     /// and resolves metadata back through `InstrumentMaster::get` only
     /// when it actually needs a field, keeping the hot path free of
-    /// record copies.
+    /// record copies. Use this when "how many, if any" is itself useful
+    /// information (an option chain, a scan of what's live today); use
+    /// `.one()` when you're naming one specific real instrument and a
+    /// miss should stop the run, not be silently absorbed.
     pub fn collect(self) -> Vec<InstrumentId> {
         self.items.iter().map(|i| i.id).collect()
+    }
+
+    /// Terminal call for "this names exactly one real instrument."
+    /// **Panics, unconditionally, if the match count isn't exactly 1** --
+    /// zero (the requested attributes don't describe a real instrument
+    /// today -- typo, wrong strike, wrong expiry, wrong day) or more than
+    /// one (the query was ambiguous -- e.g. an option query missing
+    /// `.right()` or `.strike()`). This is deliberate, not a bug to
+    /// silence: qtrade's rule is that a strategy's stated intent for one
+    /// specific instrument either resolves for real or the run stops
+    /// loudly, never proceeds quietly short of what it asked for.
+    pub fn one(self) -> InstrumentId {
+        match self.items.len() {
+            1 => self.items[0].id,
+            0 => panic!("InstrumentQuery.one(): zero instruments matched [{}] -- this doesn't describe a real instrument in today's refdata", self.trail.join(", ")),
+            n => panic!(
+                "InstrumentQuery.one(): {n} instruments matched [{}], expected exactly 1 -- narrow the query (e.g. add .right()/.strike()/.expiry()). Matched native ids: {:?}",
+                self.trail.join(", "),
+                self.items.iter().map(|i| i.native_id).collect::<Vec<_>>()
+            ),
+        }
     }
 }
 

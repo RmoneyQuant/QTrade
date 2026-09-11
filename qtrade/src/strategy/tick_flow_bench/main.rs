@@ -15,7 +15,7 @@ fn main() -> ExitCode {
     };
 
     let start = Instant::now();
-    let strategy = match qtrade::run_backtest(Path::new(config_path), tick_flow_bench::UNDERLYINGS, TickFlowBench::new()) {
+    let strategy = match qtrade::run_backtest(Path::new(config_path), TickFlowBench::new()) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("{e}");

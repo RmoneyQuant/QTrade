@@ -45,7 +45,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let strategy = match qtrade::run_backtest(Path::new(config_path), order_lifecycle_demo::UNDERLYINGS, OrderLifecycleDemo::new()) {
+    let strategy = match qtrade::run_backtest(Path::new(config_path), OrderLifecycleDemo::new()) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("{e}");

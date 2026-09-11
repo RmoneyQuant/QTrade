@@ -264,13 +264,15 @@ impl OrderLifecycleDemo {
 impl Strategy for OrderLifecycleDemo {
     fn on_start(&mut self, ctx: &mut StartCtx) {
         for name in UNDERLYINGS {
-            if let Some(id) = ctx.resolve(name) {
-                self.instrument = Some(id);
-                ctx.subscribe(id, Depth::Bbo);
-                tracing::info!("{}", logging::line("OrderLifecycleDemo", None, "SUBSCRIBE", &format!("{name} -- native/MCX token id={}, depth=Bbo", id.0)));
-            } else {
-                tracing::info!("{}", logging::line("OrderLifecycleDemo", None, "SUBSCRIBE", &format!("{name} -- NOT resolved in this day's refdata")));
-            }
+            // `ctx.resolve` panics loudly on its own if `name` doesn't
+            // resolve (2026-09-09: qtrade's own rule -- a strategy's
+            // declared intent either resolves to a real instrument or the
+            // run stops, never silently proceeds short one) -- no local
+            // else-branch needed any more.
+            let id = ctx.resolve(name);
+            self.instrument = Some(id);
+            ctx.subscribe(id, Depth::Bbo);
+            tracing::info!("{}", logging::line("OrderLifecycleDemo", None, "SUBSCRIBE", &format!("{name} -- native/MCX token id={}, depth=Bbo", id.0)));
         }
         tracing::info!("{}", logging::line("OrderLifecycleDemo", None, "START", "order-lifecycle demo armed -- first scripted action at 10:05 IST"));
     }

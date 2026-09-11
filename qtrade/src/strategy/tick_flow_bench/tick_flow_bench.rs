@@ -104,13 +104,12 @@ impl TickFlowBench {
 impl Strategy for TickFlowBench {
     fn on_start(&mut self, ctx: &mut StartCtx) {
         for name in UNDERLYINGS {
-            if let Some(id) = ctx.resolve(name) {
-                self.instrument = Some(id);
-                ctx.subscribe(id, Depth::Bbo);
-                tracing::info!("{}", logging::line("TickFlowBench", None, "SUBSCRIBE", &format!("{name} -- native/MCX token id={}, depth=Bbo", id.0)));
-            } else {
-                tracing::info!("{}", logging::line("TickFlowBench", None, "SUBSCRIBE", &format!("{name} -- NOT resolved in this day's refdata")));
-            }
+            // `ctx.resolve` panics loudly on its own if `name` doesn't
+            // resolve -- see `StartCtx::resolve`'s own doc comment.
+            let id = ctx.resolve(name);
+            self.instrument = Some(id);
+            ctx.subscribe(id, Depth::Bbo);
+            tracing::info!("{}", logging::line("TickFlowBench", None, "SUBSCRIBE", &format!("{name} -- native/MCX token id={}, depth=Bbo", id.0)));
         }
     }
 
