@@ -35,17 +35,23 @@ That's the whole invocation — one argument, the path to a config file. A run
 looks like this:
 
 ```
-refdata: 17094 instruments loaded, filter admits 1 native ids, 1 of them resolved for order entry
+refdata: 16695 instruments loaded
+subscribed 1 instrument(s), filter admits 1 native ids, 1 resolved for order entry
 ... replay progress ...
 --- report (Tier 1) ---
 === qtrade run report (Tier 1) ===
 ...
+backtest wall-clock time: 4.10s (0m 4.1s)
 logs written:
   logs/qtrade/<timestamp>/events.log   (full event trail)
   logs/qtrade/<timestamp>/orders.log   (every order-state transition)
   logs/qtrade/<timestamp>/fills.log    (every fill)
   logs/qtrade/<timestamp>/report.txt   (P&L, costs, inventory)
 ```
+
+All four log files open with a run banner and close with
+`>> Successfully completed backtest` — a quick visual check that a run
+finished cleanly rather than being cut off mid-write.
 
 A fresh, timestamped folder is created under `report_dir` (set in the config)
 on every run — nothing is ever overwritten.
@@ -91,21 +97,34 @@ qtrade = { path = "../QTrade/qtrade" }   # adjust to wherever you cloned this re
 
 ```rust
 // your-strategy/src/main.rs
-struct MyStrategy { /* ... */ }
+struct MyStrategy { instrument: Option<qtrade::InstrumentId> }
 
 impl qtrade::Strategy for MyStrategy {
-    fn on_start(&mut self, ctx: &mut qtrade::StartCtx) { /* subscribe */ }
+    fn on_start(&mut self, ctx: &mut qtrade::StartCtx) {
+        // Panics loudly if "NATURALGAS" isn't a real instrument today --
+        // never a silent None to forget to check. Anything beyond "front-
+        // month future by name" (a specific Option, a specific expiry)
+        // goes through ctx.instruments()... .one() instead -- see the guide.
+        let id = ctx.resolve("NATURALGAS");
+        ctx.subscribe(id, qtrade::Depth::Bbo);
+        self.instrument = Some(id);
+    }
     fn on_book(&mut self, ctx: &mut qtrade::Ctx, id: qtrade::InstrumentId, ..) { /* trade */ }
 }
 
 fn main() {
     let config_path = std::path::Path::new("config.toml");
-    qtrade::run_backtest(config_path, &["NATURALGAS"], MyStrategy::new()).unwrap();
+    qtrade::run_backtest(config_path, MyStrategy::new()).unwrap();
 }
 ```
 
+Instrument selection lives entirely inside `on_start` now — `run_backtest`
+takes just the config path and your strategy, nothing else; whatever your
+strategy subscribes to *is* the tracked instrument set for the run.
+
 **Full guide, everything the `Strategy` trait offers, order types, units, the
-report fields, gotchas:** [`docs/write_strategy.md`](docs/write_strategy.md).
+report fields, gotchas:** [`docs/write_strategy.md`](docs/write_strategy.md)
+— start with its Quickstart section for the five-minute version.
 
 ## Where things live
 

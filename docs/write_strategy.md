@@ -37,6 +37,79 @@ working strategy you can copy as a starting point.
 
 ---
 
+## Quickstart — the five-minute version
+
+Skip this if you want the full explanation (§0 onward). This is the whole
+shape, nothing left out:
+
+```rust
+// src/my_strategy.rs, in your own crate (qtrade = { path = "..." } in
+// Cargo.toml -- see §2)
+use qtrade::{Ctx, Depth, InstrumentId, Lots, OrderType, Side, StartCtx, Strategy};
+
+pub struct MyStrategy {
+    instrument: Option<InstrumentId>,
+    traded: bool,
+}
+
+impl MyStrategy {
+    pub fn new() -> Self {
+        Self { instrument: None, traded: false }
+    }
+}
+
+impl Strategy for MyStrategy {
+    fn on_start(&mut self, ctx: &mut StartCtx) {
+        // 1. DEFINE + FILTER: name a real instrument by its real
+        //    attributes. Panics loudly, right here, if it isn't real in
+        //    today's refdata -- no silent None to forget to check.
+        let id = ctx.resolve("NATURALGAS"); // front-month future, the common case
+        // 2. SUBSCRIBE: only now does this instrument start sending you data.
+        ctx.subscribe(id, Depth::Bbo);
+        self.instrument = Some(id);
+    }
+
+    fn on_book(&mut self, ctx: &mut Ctx, instrument: InstrumentId, _seq: u64, _packet_ts: u64) {
+        if self.instrument != Some(instrument) || self.traded {
+            return;
+        }
+        let Some(book) = ctx.book(instrument) else { return };
+        let Some(bid) = book.best_bid() else { return };
+        // 3. TRADE.
+        if ctx.submit(instrument, Side::Buy, OrderType::LimitDay(bid.price), Lots(1)).is_ok() {
+            self.traded = true;
+        }
+    }
+}
+```
+
+```rust
+// src/main.rs
+mod my_strategy;
+use my_strategy::MyStrategy;
+use std::{path::Path, process::ExitCode};
+
+fn main() -> ExitCode {
+    let config = std::env::args().nth(1).expect("usage: my-strategy <config.toml>");
+    match qtrade::run_backtest(Path::new(&config), MyStrategy::new()) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => { eprintln!("{e}"); ExitCode::FAILURE }
+    }
+}
+```
+
+```bash
+cargo run --release -- configs/your_config.toml
+```
+
+That's a complete strategy: define/filter an instrument, subscribe, trade
+once, stop. Everything below explains each piece in depth, what else you can
+ask for (Options, specific strikes, several instruments of different kinds
+in one strategy — see §4), and what else is available (reading the book,
+P&L, cancel/modify, logging).
+
+---
+
 ## 0. What qtrade is, and what a "strategy" is here
 
 qtrade is a **backtester for MCX commodity futures**. It replays a real
@@ -404,47 +477,138 @@ Two things to know:
 
 ## 4. `StartCtx` — resolving and subscribing to instruments
 
-`StartCtx` is handed only to `on_start`. It has exactly two methods.
+`StartCtx` is handed only to `on_start`. This is the **only** place you
+declare which instruments you want — `run_backtest` no longer takes a list of
+names from you; whatever you `subscribe()` to here *is* the tracked
+instrument set for the whole run, decided by your own code, not a parameter
+the caller has to keep in sync with what your strategy actually wants.
 
 ```rust
 impl StartCtx<'_> {
-    pub fn resolve(&self, name: &str) -> Option<InstrumentId>;
+    pub fn instruments(&self) -> InstrumentQuery<'_>;
+    pub fn resolve(&self, name: &str) -> InstrumentId;
     pub fn subscribe(&mut self, instrument: InstrumentId, depth: Depth);
 }
 ```
 
-### 4.1 `resolve(name)` — turn a name into an instrument id
+### 4.1 The rule: a request either names a real instrument, or the run stops
+
+This applies to everything in this section. There is no "quietly returns
+nothing" path anywhere in instrument resolution:
+
+> **A strategy's declared intent either resolves to a real instrument in
+> today's reference data, or the run panics, loudly, right there, naming
+> exactly what was asked for.** Never a silent `None`/empty result a caller
+> could forget to check.
+
+If you've used an older version of this doc: `resolve` used to return
+`Option<InstrumentId>`. It doesn't any more — see §4.2.
+
+### 4.2 `resolve(name)` — the common case: front-month future by name
 
 ```rust
-let Some(id) = ctx.resolve("NATURALGAS") else { return };
+let id = ctx.resolve("NATURALGAS");   // InstrumentId, not Option — panics if not real today
+ctx.subscribe(id, Depth::Bbo);
 ```
 
 `name` is an **underlying/commodity name**, not a contract symbol and not a
 token number. `resolve` returns the `InstrumentId` for **this trading day's
 front-month future** on that underlying, looked up out of that day's real MCX
-contract master file (`MCXScrips.bcp`).
+contract master file (`MCXScrips.bcp`). Point qtrade at a different day's
+capture file and `resolve("NATURALGAS")` automatically finds *that* day's
+front-month NATURALGAS future — a different token number, resolved for you.
+Your strategy code does not change.
 
-This matters a lot: you never hardcode a token. Point qtrade at a different
-day's capture file and `resolve("NATURALGAS")` automatically finds *that*
-day's front-month NATURALGAS future — a different token number, resolved for
-you. Your strategy code does not change.
+**Panics if `name` isn't a real, tradable Future today** — a typo, an
+underlying that doesn't trade that day, or a name that only exists as an
+Option/Index instrument (`resolve` only ever looks for a Future — see §4.3
+for anything else). This is deliberate (§4.1), not a rough edge: an
+instrument your strategy depends on either exists or the run stops before
+wasting time on a backtest that was quietly missing something.
 
-Returns `None` if the name does not resolve to a real front-month future in
-that day's reference data. Always handle it.
+`resolve` is shorthand for exactly this `ctx.instruments()` call:
 
-**Which names are valid?** Only names in the `underlyings: &[&str]` list you
-pass to `qtrade::run_backtest` (see §12) — `run_backtest` resolves each one
-against the day's contract file before your strategy is even constructed, and
-builds the lookup table `resolve` reads. A name you didn't pass in will always
-return `None`, no matter what you subscribe to.
+```rust
+ctx.instruments().underlying(name).kind_is_future().front_n_expiries(1).one()
+```
 
-The convention every strategy in this tree follows is to declare
-`pub const UNDERLYINGS: &[&str]` on your own strategy module and pass that
-straight through to `run_backtest` — keeps the strategy and its own
-instrument list in one place — but it's a convention, not something
-`run_backtest`'s signature requires; it just takes a plain `&[&str]`.
+### 4.3 `ctx.instruments()` — anything else: Options, a specific expiry, several kinds in one strategy
 
-### 4.2 `subscribe(instrument, depth)` — start receiving that instrument's data
+A bare name is only ever enough to specify *one* Future (underlying + "the
+nearest expiry" is a complete description). It can't express an Option at
+all — an Option also needs a strike and a right (call/put), and there's no
+way to fit those into a `&str`. For anything beyond the common case, query
+the real catalog directly:
+
+```rust
+pub struct InstrumentQuery<'a> { /* ... */ }
+
+impl<'a> InstrumentQuery<'a> {
+    pub fn venue(self, venue: Venue) -> Self;
+    pub fn underlying(self, name: &str) -> Self;
+    pub fn kind_is_future(self) -> Self;
+    pub fn kind_is_option(self) -> Self;
+    pub fn right(self, right: Right) -> Self;              // Right::Call | Right::Put
+    pub fn strike(self, strike: Price) -> Self;             // exact match, wire-raw scale
+    pub fn expiry(self, expiry: Date) -> Self;               // exact match
+    pub fn front_n_expiries(self, n: usize) -> Self;         // nearest n, sorted
+    pub fn collect(self) -> Vec<InstrumentId>;                // however many matched, zero included
+    pub fn one(self) -> InstrumentId;                          // exactly one, or panic (§4.1)
+}
+```
+
+Two different terminal calls, two different jobs:
+
+- **`.one()`** — "I am naming one specific real instrument." Panics if zero
+  matched (nothing today has these attributes) or more than one matched (the
+  query was ambiguous — usually a missing `.right()` or `.strike()` on an
+  Option query). Use this whenever you know exactly what you want.
+- **`.collect()`** — open-ended enumeration. Returns whatever matched, zero
+  included — use this when "how many, if any" is itself useful information
+  (scanning a whole option chain, checking what's live today), not when
+  you're naming a specific contract.
+
+A worked example — a Future *and* a specific Option, in one strategy:
+
+```rust
+fn on_start(&mut self, ctx: &mut StartCtx) {
+    let future = ctx.resolve("NATURALGAS");
+    ctx.subscribe(future, Depth::Bbo);
+
+    let call = ctx.instruments()
+        .underlying("NATURALGAS")
+        .kind_is_option()
+        .right(Right::Call)
+        .strike(Price(250 * 100_000_000))   // Rs 250.00, wire-raw scale (§7.1)
+        .front_n_expiries(1)
+        .one();
+    ctx.subscribe(call, Depth::Bbo);
+}
+```
+
+**Looping over several strikes instead of writing each one by hand** —
+`.one()` per iteration means a strike that isn't real today panics right
+there, naming exactly which one, instead of silently subscribing to fewer
+strikes than you asked for:
+
+```rust
+for strike_rupees in [200.0, 250.0, 300.0] {
+    let strike = Price((strike_rupees * 100_000_000.0) as i64);
+    let id = ctx.instruments().underlying("NATURALGAS").kind_is_option()
+        .right(Right::Call).strike(strike).front_n_expiries(1).one();
+    ctx.subscribe(id, Depth::Bbo);
+}
+```
+
+**What kinds are real today?** `FUTCOM`/`FUTIDX` (commodity and index
+futures) and `OPTFUT`/`OPTIDX` (commodity and index options) all load —
+`Right`, `Exercise` (`Call`/`Put`, `European`/`American`), `PricingModel`
+(MCX's real "Options Pricing Model" column — `Black76` on every real option
+checked so far), and `Settlement` (`Cash`/`Physical`, derived from the real
+per-instrument Delivery Mode column, not assumed) are all real attributes on
+`InstrumentKind::Option`/`Future` — see §5.3.
+
+### 4.4 `subscribe(instrument, depth)` — start receiving that instrument's data
 
 ```rust
 ctx.subscribe(id, Depth::Bbo);
@@ -480,30 +644,30 @@ You may subscribe to several instruments, and you will be woken for each of
 them. **Always check the `instrument` parameter** at the top of `on_book` /
 `on_trade` — you will otherwise act on the wrong contract.
 
-### 4.3 A complete `on_start`
+### 4.5 A complete `on_start`, several underlyings
 
 ```rust
 const UNDERLYINGS: &[&str] = &["NATURALGAS", "CRUDEOIL"];
 
 fn on_start(&mut self, ctx: &mut StartCtx) {
     for name in UNDERLYINGS {
-        match ctx.resolve(name) {
-            Some(id) => {
-                ctx.subscribe(id, Depth::Bbo);
-                self.instruments.push((*name, id));
-                tracing::info!("{}", logging::line(
-                    "MyStrategy", None, "SUBSCRIBE",
-                    &format!("{name} -> token {}", id.0)));
-            }
-            None => {
-                tracing::info!("{}", logging::line(
-                    "MyStrategy", None, "SUBSCRIBE",
-                    &format!("{name} -- NOT resolved in this day's refdata")));
-            }
-        }
+        // Panics loudly if `name` isn't a real front-month future today
+        // (§4.1) -- no else-branch needed, there is nothing to check.
+        let id = ctx.resolve(name);
+        ctx.subscribe(id, Depth::Bbo);
+        self.instruments.push((*name, id));
+        tracing::info!("{}", logging::line(
+            "MyStrategy", None, "SUBSCRIBE",
+            &format!("{name} -> token {}", id.0)));
     }
 }
 ```
+
+`UNDERLYINGS` here is just a `const` on your own strategy module — a
+convenient way to keep a strategy and its own instrument list in one place,
+the same convention every strategy in this tree follows. It's not read by
+`run_backtest` or anything else automatically; your `on_start` is what turns
+it into real subscriptions, exactly as shown above.
 
 ---
 
@@ -584,7 +748,7 @@ pub struct Instrument {
     pub id: InstrumentId,
     pub venue: Venue,
     pub native_id: i64,             // the exchange's own token number
-    pub kind: InstrumentKind,       // Future / Option / ...
+    pub kind: InstrumentKind,       // Future { .. } / Option { .. } -- see below
     pub tick_size: Price,           // minimum price increment, wire units
     pub lot_size: i64,              // units of the commodity per lot
     pub multiplier: i64,
@@ -593,6 +757,25 @@ pub struct Instrument {
     pub currency: ...,
 }
 ```
+
+`kind` is where an instrument's *type-specific* attributes live — an enum,
+not one flat struct with optional fields, so it's impossible to accidentally
+build (say) a Future with a strike price:
+
+```rust
+pub enum InstrumentKind {
+    Future { underlying: String, expiry: Date, contract_month: YearMonth, settlement: Settlement },
+    Option { underlying: String, expiry: Date, strike: Price, right: Right, exercise: Exercise, settlement: Settlement, pricing_model: PricingModel },
+    Equity { series: String },   // not real today -- no BCP row models this
+    Spread { leg1: InstrumentId, leg2: InstrumentId },   // not real today -- no BCP row models this
+}
+```
+
+You don't construct these yourself — you only ever read them back via
+`ctx.refdata().get(id).kind` for an instrument you already resolved through
+§4. `settlement` (`Cash`/`Physical`) and, for Options, `pricing_model`
+(`BlackScholes`/`Black76`/`Bachelier`) are both real, derived from MCX's own
+reference columns, not assumed defaults.
 
 The two fields you will actually use constantly:
 
@@ -1272,20 +1455,14 @@ impl Strategy for PassiveFollower {
     // ---------------------------------------------------------------
     fn on_start(&mut self, ctx: &mut StartCtx) {
         for name in UNDERLYINGS {
-            match ctx.resolve(name) {
-                Some(id) => {
-                    ctx.subscribe(id, Depth::Bbo);
-                    self.instrument = Some(id);
-                    tracing::info!("{}", logging::line(
-                        "PassiveFollower", None, "SUBSCRIBE",
-                        &format!("{name} -- front-month token id={}, depth=Bbo", id.0)));
-                }
-                None => {
-                    tracing::info!("{}", logging::line(
-                        "PassiveFollower", None, "SUBSCRIBE",
-                        &format!("{name} -- NOT resolved in this day's refdata")));
-                }
-            }
+            // Panics loudly if `name` isn't real today (§4.1) -- nothing
+            // to check, nothing to silently skip.
+            let id = ctx.resolve(name);
+            ctx.subscribe(id, Depth::Bbo);
+            self.instrument = Some(id);
+            tracing::info!("{}", logging::line(
+                "PassiveFollower", None, "SUBSCRIBE",
+                &format!("{name} -- front-month token id={}, depth=Bbo", id.0)));
         }
         tracing::info!("{}", logging::line(
             "PassiveFollower", None, "START", "armed -- first action at 10:05 IST"));
@@ -1475,7 +1652,6 @@ writing `orders.log`/`fills.log`/`report.txt`) lives behind one function:
 ```rust
 pub fn run_backtest<S: qtrade::Strategy + 'static>(
     config_path: &std::path::Path,
-    underlyings: &[&str],
     strategy: S,
 ) -> Result<std::rc::Rc<std::cell::RefCell<S>>, String>
 ```
@@ -1499,7 +1675,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    match qtrade::run_backtest(Path::new(config_path), passive_follower::UNDERLYINGS, PassiveFollower::new()) {
+    match qtrade::run_backtest(Path::new(config_path), PassiveFollower::new()) {
         Ok(_strategy) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("{e}");
@@ -1511,19 +1687,23 @@ fn main() -> ExitCode {
 
 That's the whole integration. Three things worth knowing about this call:
 
-### 12.1 `underlyings` — plain data, not a trait requirement
+### 12.1 There's no instrument list in this call — your `on_start` *is* the list
 
-`run_backtest` takes `underlyings: &[&str]` as an explicit argument — it does
-**not** read it off your strategy type by magic. Pass your strategy's own
-`UNDERLYINGS` constant straight through, as above; there's no requirement that
-you do it that way, but every strategy in this tree does, since it keeps a
-strategy and its own instrument list in one place. `run_backtest` uses this
-list, *before* your strategy is constructed, to resolve each name to that
-day's front-month token, build the instrument filter (a real performance win —
-a full day's feed carries thousands of instruments you don't care about), load
-the `Instrument` records the execution engine needs, and build the `name -> id`
-table your `on_start`'s `ctx.resolve()` reads. A name not in this list will
-always make `ctx.resolve()` return `None`, no matter what.
+Older versions of this doc had `run_backtest` take a third argument,
+`underlyings: &[&str]`, resolved *before* your strategy was even
+constructed. That's gone. Instrument selection now happens entirely inside
+your own `on_start` (§4) — `run_backtest` loads the day's full reference
+data, runs `on_start` against it, and reads back whatever your strategy
+actually called `ctx.subscribe()` on to learn the real tracked-instrument
+set (the instrument filter, the `Instrument` records the execution engine
+needs, all of it, built from that). If `on_start` subscribes to nothing at
+all, `run_backtest` returns `Err("on_start subscribed to zero instruments --
+nothing to replay")`.
+
+This is what makes mixing Futures and Options (or several of either) in one
+strategy possible — the old `&[&str]` parameter could only ever have named
+Futures by underlying, with no way to add a strike or a right to the
+request. See §4.3.
 
 ### 12.2 What you get back — and why there's no generic "end-of-run summary"
 
@@ -1554,10 +1734,10 @@ run" is a fact about the function signature, not a limit on your crate.
 ```
 [ ] your own crate, `qtrade` in [dependencies]
 [ ] your strategy struct + `impl qtrade::Strategy` with at least `on_start`
-[ ] exported `pub const UNDERLYINGS: &[&str]` (convention, not required)
+[ ] on_start resolves/queries + subscribes every instrument you need (§4)
 [ ] exported `pub fn new() -> Self` (or any constructor you like)
 [ ] your own `main.rs`: parse the config-path argument, call
-    `qtrade::run_backtest(path, UNDERLYINGS, YourStrategy::new())`
+    `qtrade::run_backtest(path, YourStrategy::new())`
 [ ] cargo build --release
 ```
 
@@ -1806,6 +1986,13 @@ logs/qtrade/20260903_143122/
 
 The folder name is the run's start time in IST (`YYYYMMDD_HHMMSS`). Runs never
 overwrite each other, so you can compare two runs side by side.
+
+All four files open with the same run banner and close with the same
+`>> Successfully completed backtest` line — a quick visual confirmation a
+run reached the end normally rather than being cut off mid-write.
+`report.txt` also prints the backtest's real wall-clock ("system") time —
+how long the run itself took, not simulated market time — right above that
+closing line.
 
 > If your strategy never submits an order, `orders.log`, `fills.log` and the
 > body of `report.txt` are legitimately empty. That is not a bug — the pure
@@ -2122,12 +2309,14 @@ returns `Err` only for the `can_submit` violation in §16.1.
 
 Costs on MCX are large and charged on notional. Read `net_pnl`. See §15.4.
 
-### 16.17 `run_backtest` needs your underlyings list and a constructed strategy
+### 16.17 `run_backtest` takes your already-constructed strategy, nothing else
 
-Not "exported" in a way qtrade enforces — you pass `underlyings: &[&str]` and
-your already-constructed `strategy: S` directly as arguments to
-`qtrade::run_backtest`. The `UNDERLYINGS` constant + `new()` pattern is just
-the convention every strategy in this tree follows. See §12.1.
+`qtrade::run_backtest(config_path, strategy: S)` — that's the whole call.
+Instrument selection is not a parameter any more; it happens inside your own
+`on_start` (§4). The `UNDERLYINGS` constant + `new()` pattern you'll see in
+every strategy in this tree is just a convention for keeping a strategy and
+its own instrument list together, not something `run_backtest` reads. See
+§12.1.
 
 ---
 
@@ -2205,6 +2394,8 @@ every API call takes the `client_order_id`.
 ```rust
 use qtrade::logging;
 use qtrade::{Book, BookState, Ctx, Depth, FillRecord, InstrumentId, Lots, OrderEventRecord, OrderType, Price, Qty, Side, StartCtx, Strategy, Trade, RAW_QTY_PER_LOT};
+// only if you're querying beyond a plain resolve() -- see §4.3
+use qtrade::{Date, Exercise, PricingModel, Right, Settlement, Venue};
 ```
 
 ### The trait
@@ -2222,7 +2413,9 @@ use qtrade::{Book, BookState, Ctx, Depth, FillRecord, InstrumentId, Lots, OrderE
 ### `StartCtx`
 
 ```rust
-ctx.resolve("NATURALGAS")                  // -> Option<InstrumentId>  (this day's front month)
+ctx.resolve("NATURALGAS")                  // -> InstrumentId (this day's front month) -- PANICS if not real (§4.1)
+ctx.instruments()                          // -> InstrumentQuery -- .underlying/.kind_is_option/.right/.strike/.expiry/.front_n_expiries
+                                            //    .collect() -> Vec<InstrumentId> (zero ok)  |  .one() -> InstrumentId (PANICS unless exactly 1)
 ctx.subscribe(id, Depth::Bbo)              // or Depth::Top(5)
 ```
 
@@ -2293,7 +2486,7 @@ use <name>::<Struct>;
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let Some(config_path) = args.get(1) else { return std::process::ExitCode::FAILURE };
-    match qtrade::run_backtest(std::path::Path::new(config_path), <name>::UNDERLYINGS, <Struct>::new()) {
+    match qtrade::run_backtest(std::path::Path::new(config_path), <Struct>::new()) {
         Ok(_) => std::process::ExitCode::SUCCESS,
         Err(e) => { eprintln!("{e}"); std::process::ExitCode::FAILURE }
     }
@@ -2329,6 +2522,13 @@ them; you do not need it cloned to build against `qtrade` as a dependency
 - **`qtrade/src/strategy/order_lifecycle_demo/`** — a scripted walk through
   every order state, and the strategy compiled into the shipped `qtrade` demo
   binary. The best reference for "what does this callback actually receive".
+- **`qtrade/src/strategy/instrument_selection_demo/`** — the §4/Quickstart
+  pattern as a real, runnable strategy: define + filter + subscribe a Future
+  and a specific Option, place a couple of real trades, stop.
+- **`qtrade/src/strategy/mixed_instruments_demo/`** — a pure existence proof
+  (subscribes only, never trades) that `ctx.instruments()` really does
+  resolve every real kind — commodity and index, Future and Option — in one
+  strategy; prints each one's real `settlement`/`pricing_model` back out.
 - **`qtrade/src/strategy/multi_instrument_bracket/`** — a real two-instrument
   strategy with resting orders, `modify()` and `cancel()`.
 - **`qtrade/src/strategy/limit_order_book_generator/`** — the simplest possible
